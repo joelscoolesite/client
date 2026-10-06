@@ -46,7 +46,7 @@ add_library(BedrockWaypoints SHARED
     src/render.cpp
     src/ui.cpp
     src/waypoints.cpp)
-target_link_libraries(BedrockWaypoints PRIVATE imgui minhook d3d11 d3d12 dxgi d3dcompiler dwmapi)
+target_link_libraries(BedrockWaypoints PRIVATE imgui minhook d3d11 d3d12 dxgi d3dcompiler dwmapi version)
 target_compile_definitions(BedrockWaypoints PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE)
 
 if(MSVC)

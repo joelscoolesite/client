@@ -121,6 +121,8 @@ void DrawMenu(const CameraState& cam) {
         std::lock_guard lock(s_statusMutex);
         if (!s_status.empty()) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", s_status.c_str());
     }
+    ImGui::TextDisabled("Minecraft %s, profile: %s", game::GameVersion().c_str(),
+                        g_offsets.name.empty() ? "none" : g_offsets.name.c_str());
     if (cam.valid) {
         ImGui::Text("Your position: %.0f %.0f %.0f", std::floor(cam.origin.x),
                     std::floor(cam.origin.y - kEyeHeight), std::floor(cam.origin.z));

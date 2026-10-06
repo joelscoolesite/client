@@ -1,29 +1,41 @@
 #pragma once
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <string>
+#include <vector>
 
-// Everything that changes between Minecraft versions lives here so it can be
-// fixed in config.ini without recompiling. Defaults are for 1.26.x.
+// Where the camera lives in Minecraft's memory. This changes between game versions,
+// so there is one profile per version and the matching one is picked at startup.
+struct Offsets {
+    std::string name;
+    // ScreenView::setupAndRender(ScreenView*, MinecraftUIRenderContext*)
+    std::string setupAndRenderSig;
+    bool sigIsCall = false; // the signature matches a `call setupAndRender` instead of the function itself
+
+    uintptr_t uiContextClientInstance = 0;     // MinecraftUIRenderContext -> ClientInstance*
+    uintptr_t clientInstanceMinecraftGame = 0; // ClientInstance -> MinecraftGame*
+    uintptr_t minecraftGameGameRenderer = 0;   // MinecraftGame -> GameRenderer*
+    uintptr_t gameRendererViewMatrix = 0;      // GameRenderer -> glm::mat4 view
+    uintptr_t gameRendererProjMatrix = 0;      // GameRenderer -> glm::mat4 projection
+    uintptr_t clientInstanceLevelRenderer = 0; // ClientInstance -> LevelRenderer* (0 = use the virtual below)
+    uintptr_t clientInstanceGetLevelRenderer = 0; // ClientInstance::getLevelRenderer vtable index
+    uintptr_t levelRendererPlayer = 0;            // LevelRenderer -> LevelRendererPlayer*
+    uintptr_t levelRendererPlayerCameraPos = 0;   // LevelRendererPlayer -> Vec3 camera position
+};
+
 struct Config {
     int menuKey = 0x77; // VK_F8
-
-    // ScreenView::setupAndRender(ScreenView*, MinecraftUIRenderContext*)
-    std::string setupAndRenderSig =
-        "48 89 5C 24 ? 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 ? ? ? ? 48 81 EC ? ? ? ? "
-        "0F 29 BC 24 ? ? ? ? 48 8B 05 ? ? ? ? 48 33 C4 48 89 85 ? ? ? ? 4C 8B FA";
-
-    uintptr_t uiContextClientInstance = 0x8;    // MinecraftUIRenderContext -> ClientInstance*
-    uintptr_t clientInstanceMinecraftGame = 0x1A0; // ClientInstance -> MinecraftGame*
-    uintptr_t minecraftGameGameRenderer = 0xD70;   // MinecraftGame -> GameRenderer*
-    uintptr_t gameRendererViewMatrix = 0x358;      // GameRenderer -> glm::mat4 view
-    uintptr_t gameRendererProjMatrix = 0x3D8;      // GameRenderer -> glm::mat4 projection
-    uintptr_t clientInstanceGetLevelRenderer = 187; // virtual function index
-    uintptr_t levelRendererPlayer = 0x430;         // LevelRenderer -> LevelRendererPlayer*
-    uintptr_t levelRendererPlayerCameraPos = 0x704; // LevelRendererPlayer -> Vec3 camera position
+    std::string profile = "auto";
+    // Raw key=value pairs from config.ini that override the detected profile.
+    std::map<std::string, std::string> overrides;
 };
 
 extern Config g_config;
+extern Offsets g_offsets; // the profile in use, set by game::Init
+
+const std::vector<Offsets>& BuiltInProfiles();
+void ApplyOverrides(Offsets& offsets);
 
 std::filesystem::path DataDir();
 void LoadConfig();

@@ -19,6 +19,9 @@ namespace game {
 // Finds the game function and hooks it. Returns false and fills `error` on failure.
 bool Init(std::string& error);
 
+// File version of Minecraft.Windows.exe, e.g. "1.26.5001.0".
+std::string GameVersion();
+
 CameraState Camera();
 
 // Projects a world position to screen pixels. Returns false when the point is behind the camera.

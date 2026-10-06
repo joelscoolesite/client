@@ -22,11 +22,19 @@ Waypoints worden opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\waypoints.txt`, 
 ## Na een Minecraft update
 
 De DLL leest de camera uit het geheugen van Minecraft. Waar dat precies staat (signature en offsets) verandert soms
-bij een update. De standaardwaarden zijn voor **1.26.x**.
+bij een update. Ingebouwde profielen:
 
-Werkt het niet (het menu zegt *"Not in a world"* of *"setupAndRenderSig not found"*), open dan
-`%LOCALAPPDATA%\BedrockWaypoints\config.ini` en zet daar de nieuwe waarden in. Je hoeft niet opnieuw te bouwen.
-Verwijder `config.ini` om terug te gaan naar de standaardwaarden. In `log.txt` in dezelfde map zie je wat er gebeurde.
+| Profiel | Bron |
+| --- | --- |
+| `1.26.5x` | [Latite](https://github.com/LatiteClient/Latite) |
+| `1.26.0-1.26.3` | [Flarial](https://github.com/flarialmc/dll) |
+
+De DLL probeert ze zelf en kiest de eerste die past. Bovenin het menu zie je je Minecraft-versie en welk profiel
+gebruikt wordt. Werkt geen enkel profiel, dan zegt het menu *"... is not supported yet"*.
+
+Nieuwe waarden kun je zonder opnieuw bouwen invullen in `%LOCALAPPDATA%\BedrockWaypoints\config.ini`: haal de `;`
+weg voor een regel en pas de waarde aan. Verwijder `config.ini` om terug te gaan naar de standaardwaarden.
+In `log.txt` in dezelfde map zie je wat er gebeurde.
 
 In `config.ini` kun je ook een andere menu-toets kiezen (`menuKey`, bijv. `0x2D` voor Insert).
 

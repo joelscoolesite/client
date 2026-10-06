@@ -6,6 +6,7 @@
 #include <MinHook.h>
 
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -60,7 +61,7 @@ T Read(uintptr_t address) {
 }
 
 bool ReadCameraUnsafe(uintptr_t uiContext, CameraState& out) {
-    const Config& c = g_config;
+    const Offsets& c = g_offsets;
     const auto clientInstance = Read<uintptr_t>(uiContext + c.uiContextClientInstance);
     if (!clientInstance) return false;
 
@@ -69,10 +70,14 @@ bool ReadCameraUnsafe(uintptr_t uiContext, CameraState& out) {
     const auto gameRenderer = Read<uintptr_t>(minecraftGame + c.minecraftGameGameRenderer);
     if (!gameRenderer) return false;
 
-    using GetLevelRendererFn = uintptr_t(__fastcall*)(uintptr_t);
-    const auto vtable = Read<uintptr_t*>(clientInstance);
-    const auto getLevelRenderer = reinterpret_cast<GetLevelRendererFn>(vtable[c.clientInstanceGetLevelRenderer]);
-    const uintptr_t levelRenderer = getLevelRenderer(clientInstance);
+    uintptr_t levelRenderer = 0;
+    if (c.clientInstanceLevelRenderer) {
+        levelRenderer = Read<uintptr_t>(clientInstance + c.clientInstanceLevelRenderer);
+    } else {
+        using GetLevelRendererFn = uintptr_t(__fastcall*)(uintptr_t);
+        const auto vtable = Read<uintptr_t*>(clientInstance);
+        levelRenderer = reinterpret_cast<GetLevelRendererFn>(vtable[c.clientInstanceGetLevelRenderer])(clientInstance);
+    }
     if (!levelRenderer) return false; // not in a world
     const auto rendererPlayer = Read<uintptr_t>(levelRenderer + c.levelRendererPlayer);
     if (!rendererPlayer) return false;
@@ -120,19 +125,58 @@ void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
 
 namespace game {
 
+std::string GameVersion() {
+    static const std::string version = [] {
+        wchar_t path[MAX_PATH]{};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        DWORD handle = 0;
+        const DWORD size = GetFileVersionInfoSizeW(path, &handle);
+        if (!size) return std::string("unknown");
+        std::vector<uint8_t> data(size);
+        VS_FIXEDFILEINFO* info = nullptr;
+        UINT len = 0;
+        if (!GetFileVersionInfoW(path, 0, size, data.data()) ||
+            !VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&info), &len) || !info)
+            return std::string("unknown");
+        char text[64];
+        snprintf(text, sizeof(text), "%u.%u.%u.%u", HIWORD(info->dwFileVersionMS), LOWORD(info->dwFileVersionMS),
+                 HIWORD(info->dwFileVersionLS), LOWORD(info->dwFileVersionLS));
+        return std::string(text);
+    }();
+    return version;
+}
+
 bool Init(std::string& error) {
-    const auto address = FindPattern(g_config.setupAndRenderSig);
-    if (!address) {
-        error = "setupAndRenderSig not found (different Minecraft version?). Update config.ini.";
-        return false;
+    Log("Minecraft version: " + GameVersion());
+
+    for (const Offsets& profile : BuiltInProfiles()) {
+        if (g_config.profile != "auto" && g_config.profile != profile.name) continue;
+
+        Offsets candidate = profile;
+        ApplyOverrides(candidate);
+        auto address = FindPattern(candidate.setupAndRenderSig);
+        if (!address) {
+            Log("Profile " + candidate.name + ": signature not found");
+            continue;
+        }
+        if (candidate.sigIsCall) {
+            // E8 <rel32>: target = next instruction + rel32
+            *address += 5 + *reinterpret_cast<int32_t*>(*address + 1);
+        }
+
+        g_offsets = candidate;
+        if (MH_CreateHook(reinterpret_cast<void*>(*address), reinterpret_cast<void*>(&SetupAndRenderDetour),
+                          reinterpret_cast<void**>(&g_originalSetupAndRender)) != MH_OK ||
+            MH_EnableHook(reinterpret_cast<void*>(*address)) != MH_OK) {
+            error = "Failed to hook setupAndRender.";
+            return false;
+        }
+        Log("Using profile " + candidate.name);
+        return true;
     }
-    if (MH_CreateHook(reinterpret_cast<void*>(*address), reinterpret_cast<void*>(&SetupAndRenderDetour),
-                      reinterpret_cast<void**>(&g_originalSetupAndRender)) != MH_OK ||
-        MH_EnableHook(reinterpret_cast<void*>(*address)) != MH_OK) {
-        error = "Failed to hook setupAndRender.";
-        return false;
-    }
-    return true;
+
+    error = "Minecraft " + GameVersion() + " is not supported yet (signature not found).";
+    return false;
 }
 
 CameraState Camera() {
