@@ -1,0 +1,51 @@
+# Bedrock Waypoints
+
+Een DLL voor Minecraft Bedrock (Windows) die waypoints in je scherm tekent. Je typt coördinaten in, en je ziet een
+marker met naam, afstand en een lichtstraal op die plek. Staat de waypoint buiten beeld, dan wijst een pijltje aan de
+rand van je scherm de goede kant op.
+
+## Downloaden
+
+Elke push bouwt de DLL automatisch op GitHub:
+**Actions** → nieuwste **Build DLL** run → onderaan bij **Artifacts** → `BedrockWaypoints` (zip met de `.dll`).
+
+## Gebruiken
+
+1. Start Minecraft en ga een wereld of server in.
+2. Injecteer `BedrockWaypoints.dll` met je injector.
+3. Druk op **Esc** (zodat je muis vrij is) en daarna op **F8** om het menu te openen.
+4. Vul een **Name** en **X Y Z** in (of klik **Use my position**) en klik **Add**.
+5. Sluit het menu met **F8** of het kruisje.
+
+Waypoints worden opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\waypoints.txt`, dus ze blijven bewaard na herstarten.
+
+## Na een Minecraft update
+
+De DLL leest de camera uit het geheugen van Minecraft. Waar dat precies staat (signature en offsets) verandert soms
+bij een update. De standaardwaarden zijn voor **1.26.x**.
+
+Werkt het niet (het menu zegt *"Not in a world"* of *"setupAndRenderSig not found"*), open dan
+`%LOCALAPPDATA%\BedrockWaypoints\config.ini` en zet daar de nieuwe waarden in. Je hoeft niet opnieuw te bouwen.
+Verwijder `config.ini` om terug te gaan naar de standaardwaarden. In `log.txt` in dezelfde map zie je wat er gebeurde.
+
+In `config.ini` kun je ook een andere menu-toets kiezen (`menuKey`, bijv. `0x2D` voor Insert).
+
+## Zelf bouwen
+
+Nodig: Visual Studio 2022 met *Desktop development with C++* en CMake.
+
+```bat
+cmake -S . -B build -A x64
+cmake --build build --config Release
+```
+
+De DLL staat dan in `build\Release\BedrockWaypoints.dll`. ImGui en MinHook worden automatisch gedownload.
+
+## Hoe het werkt
+
+- `src/render.cpp` hookt `IDXGISwapChain::Present` (DirectX 11 en 12) en tekent met ImGui over het spel heen.
+- `src/game.cpp` hookt `ScreenView::setupAndRender` en leest daar de camerapositie en view/projection matrices uit.
+  Alle reads zijn beveiligd, zodat verkeerde offsets het spel niet laten crashen.
+- `src/ui.cpp` is het menu en rekent wereldcoördinaten om naar schermposities.
+
+Let op: gebruik dit niet op servers die client-mods verbieden.
