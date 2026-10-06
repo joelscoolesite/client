@@ -11,6 +11,8 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string>
 #include <vector>
 
 namespace {
@@ -18,8 +20,8 @@ namespace {
 using SetupAndRenderFn = void(__fastcall*)(void* screenView, void* uiRenderContext);
 SetupAndRenderFn g_originalSetupAndRender = nullptr;
 
-std::mutex g_cameraMutex;
-CameraState g_camera;
+std::mutex g_stateMutex;
+GameState g_state;
 ULONGLONG g_lastValidTick = 0;
 
 std::optional<uintptr_t> FindPattern(const std::string& pattern) {
@@ -60,24 +62,37 @@ T Read(uintptr_t address) {
     return *reinterpret_cast<T*>(address);
 }
 
-bool ReadCameraUnsafe(uintptr_t uiContext, CameraState& out) {
-    const Offsets& c = g_offsets;
-    const auto clientInstance = Read<uintptr_t>(uiContext + c.uiContextClientInstance);
-    if (!clientInstance) return false;
+// Copies an MSVC std::string (data/SSO buffer, size at +0x10, capacity at +0x18).
+void ReadString(uintptr_t address, char* out, size_t outSize) {
+    out[0] = 0;
+    const auto size = Read<size_t>(address + 0x10);
+    const auto capacity = Read<size_t>(address + 0x18);
+    if (size > 4096 || capacity < size) return;
+    const char* data = capacity >= 16 ? Read<const char*>(address) : reinterpret_cast<const char*>(address);
+    const size_t n = size < outSize - 1 ? size : outSize - 1;
+    std::memcpy(out, data, n);
+    out[n] = 0;
+}
 
+uintptr_t CallVirtual(uintptr_t object, uintptr_t index) {
+    using Fn = uintptr_t(__fastcall*)(uintptr_t);
+    return reinterpret_cast<Fn>(Read<uintptr_t*>(object)[index])(object);
+}
+
+bool Finite(const Vec3& v) {
+    return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z);
+}
+
+bool ReadCameraUnsafe(uintptr_t clientInstance, GameState& out) {
+    const Offsets& c = g_offsets;
     const auto minecraftGame = Read<uintptr_t>(clientInstance + c.clientInstanceMinecraftGame);
     if (!minecraftGame) return false;
     const auto gameRenderer = Read<uintptr_t>(minecraftGame + c.minecraftGameGameRenderer);
     if (!gameRenderer) return false;
 
-    uintptr_t levelRenderer = 0;
-    if (c.clientInstanceLevelRenderer) {
-        levelRenderer = Read<uintptr_t>(clientInstance + c.clientInstanceLevelRenderer);
-    } else {
-        using GetLevelRendererFn = uintptr_t(__fastcall*)(uintptr_t);
-        const auto vtable = Read<uintptr_t*>(clientInstance);
-        levelRenderer = reinterpret_cast<GetLevelRendererFn>(vtable[c.clientInstanceGetLevelRenderer])(clientInstance);
-    }
+    const uintptr_t levelRenderer = c.clientInstanceLevelRenderer
+                                        ? Read<uintptr_t>(clientInstance + c.clientInstanceLevelRenderer)
+                                        : CallVirtual(clientInstance, c.clientInstanceGetLevelRenderer);
     if (!levelRenderer) return false; // not in a world
     const auto rendererPlayer = Read<uintptr_t>(levelRenderer + c.levelRendererPlayer);
     if (!rendererPlayer) return false;
@@ -90,35 +105,137 @@ bool ReadCameraUnsafe(uintptr_t uiContext, CameraState& out) {
         if (!std::isfinite(f)) return false;
     for (float f : out.proj)
         if (!std::isfinite(f)) return false;
-    return std::isfinite(out.origin.x) && std::isfinite(out.origin.y) && std::isfinite(out.origin.z);
+    return Finite(out.origin);
+}
+
+bool ReadPlayerUnsafe(uintptr_t clientInstance, GameState& out) {
+    const Offsets& c = g_offsets;
+    if (!c.clientInstanceGetLocalPlayer) return false;
+    const uintptr_t player = CallVirtual(clientInstance, c.clientInstanceGetLocalPlayer);
+    if (!player) return false;
+
+    if (c.actorDimension) {
+        // shared_ptr<Dimension>: the object pointer comes first
+        const auto dimension = Read<uintptr_t>(player + c.actorDimension);
+        if (dimension) ReadString(dimension + c.dimensionName, out.dimension, sizeof(out.dimension));
+    }
+    if (!c.actorStateVector) return false;
+    const auto stateVector = Read<uintptr_t>(player + c.actorStateVector);
+    if (!stateVector) return false;
+    out.playerPos = Read<Vec3>(stateVector);
+    return Finite(out.playerPos);
+}
+
+bool ReadWorldUnsafe(uintptr_t clientInstance, GameState& out) {
+    const Offsets& c = g_offsets;
+    if (!c.clientInstanceMinecraft) return false;
+    const auto minecraft = Read<uintptr_t>(clientInstance + c.clientInstanceMinecraft);
+    if (!minecraft) return false;
+    const auto session = Read<uintptr_t>(minecraft + c.minecraftGameSession);
+    if (!session || Read<uint8_t>(session + c.gameSessionHasLevel) != 1) return false;
+    const auto levelState = Read<uint8_t*>(session + c.gameSessionLevelState);
+    if (!levelState || *levelState != 1) return false;
+    const auto level = Read<uintptr_t>(session + c.gameSessionLevel);
+    if (!level) return false;
+    const auto levelData = Read<uintptr_t>(level + c.levelLevelData);
+    if (!levelData) return false;
+    ReadString(levelData + c.levelDataName, out.world, sizeof(out.world));
+    return out.world[0] != 0;
+}
+
+bool ReadScreenNameUnsafe(uintptr_t screenView, char* out, size_t outSize) {
+    const Offsets& c = g_offsets;
+    out[0] = 0;
+    if (!c.screenViewVisualTree) return false;
+    const auto tree = Read<uintptr_t>(screenView + c.screenViewVisualTree);
+    if (!tree) return false;
+    const auto root = Read<uintptr_t>(tree + c.visualTreeRoot);
+    if (!root) return false;
+    ReadString(root + c.uiControlName, out, outSize);
+    return out[0] != 0;
 }
 
 // Wrong offsets after a game update must not crash the game, so every read is guarded.
-bool ReadCamera(uintptr_t uiContext, CameraState& out) {
 #ifdef _MSC_VER
-    __try {
-        return ReadCameraUnsafe(uiContext, out);
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
-        return false;
+#define GUARDED(expr)                        \
+    __try {                                  \
+        return expr;                         \
+    } __except (EXCEPTION_EXECUTE_HANDLER) { \
+        return false;                        \
     }
 #else
-    return ReadCameraUnsafe(uiContext, out);
+#define GUARDED(expr) return expr;
 #endif
+
+bool ReadClientInstance(uintptr_t uiContext, uintptr_t& out) {
+    GUARDED((out = Read<uintptr_t>(uiContext + g_offsets.uiContextClientInstance)) != 0)
+}
+bool ReadCamera(uintptr_t clientInstance, GameState& out) {
+    GUARDED(ReadCameraUnsafe(clientInstance, out))
+}
+bool ReadPlayer(uintptr_t clientInstance, GameState& out) {
+    GUARDED(ReadPlayerUnsafe(clientInstance, out))
+}
+bool ReadWorld(uintptr_t clientInstance, GameState& out) {
+    GUARDED(ReadWorldUnsafe(clientInstance, out))
+}
+bool ReadScreenName(uintptr_t screenView, char* out, size_t outSize) {
+    GUARDED(ReadScreenNameUnsafe(screenView, out, outSize))
+}
+
+std::mutex g_deathMutex;
+bool g_deathPending = false;
+DeathInfo g_death;
+ULONGLONG g_lastDeathScreenTick = 0;
+std::set<std::string> g_seenScreens;
+
+void CheckScreen(uintptr_t screenView) {
+    char name[64];
+    if (!ReadScreenName(screenView, name, sizeof(name))) return;
+
+    // Log each screen name once, to help with fixing things after an update.
+    if (g_seenScreens.size() < 100 && g_seenScreens.insert(name).second) Log(std::string("Screen: ") + name);
+
+    if (!std::strstr(name, "death")) return;
+    const ULONGLONG now = GetTickCount64();
+    const bool newDeath = now - g_lastDeathScreenTick > 3000;
+    g_lastDeathScreenTick = now;
+    if (!newDeath) return;
+
+    GameState last;
+    {
+        std::lock_guard lock(g_stateMutex);
+        last = g_state;
+    }
+    if (!last.hasPlayer) return;
+
+    std::lock_guard lock(g_deathMutex);
+    g_death.feetPos = {last.playerPos.x, last.playerPos.y - kEyeHeight, last.playerPos.z};
+    std::memcpy(g_death.dimension, last.dimension, sizeof(g_death.dimension));
+    std::memcpy(g_death.world, last.world, sizeof(g_death.world));
+    g_deathPending = true;
+    Log("Death screen seen, saving death waypoint");
 }
 
 void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     g_originalSetupAndRender(screenView, uiRenderContext);
 
-    if (!uiRenderContext) return;
-    CameraState cam;
-    cam.valid = ReadCamera(reinterpret_cast<uintptr_t>(uiRenderContext), cam);
+    uintptr_t clientInstance = 0;
+    if (!uiRenderContext || !ReadClientInstance(reinterpret_cast<uintptr_t>(uiRenderContext), clientInstance))
+        return;
 
-    std::lock_guard lock(g_cameraMutex);
+    if (screenView) CheckScreen(reinterpret_cast<uintptr_t>(screenView));
+
+    GameState state;
+    state.valid = ReadCamera(clientInstance, state);
+    if (!state.valid) return;
+    state.hasPlayer = ReadPlayer(clientInstance, state);
+    ReadWorld(clientInstance, state);
+
     // setupAndRender runs once per screen layer; keep the last good snapshot.
-    if (cam.valid) {
-        g_camera = cam;
-        g_lastValidTick = GetTickCount64();
-    }
+    std::lock_guard lock(g_stateMutex);
+    g_state = state;
+    g_lastValidTick = GetTickCount64();
 }
 
 } // namespace
@@ -179,16 +296,24 @@ bool Init(std::string& error) {
     return false;
 }
 
-CameraState Camera() {
-    std::lock_guard lock(g_cameraMutex);
-    CameraState cam = g_camera;
+GameState State() {
+    std::lock_guard lock(g_stateMutex);
+    GameState state = g_state;
     // No fresh snapshot means we left the world (main menu, loading screen).
-    if (GetTickCount64() - g_lastValidTick > 500) cam.valid = false;
-    return cam;
+    if (GetTickCount64() - g_lastValidTick > 500) state.valid = false;
+    return state;
+}
+
+bool PollDeath(DeathInfo& out) {
+    std::lock_guard lock(g_deathMutex);
+    if (!g_deathPending) return false;
+    g_deathPending = false;
+    out = g_death;
+    return true;
 }
 
 // Matrices are column-major: M[col * 4 + row]
-static void ToViewSpace4(const CameraState& cam, const Vec3& world, float out[4]) {
+static void ToViewSpace4(const GameState& cam, const Vec3& world, float out[4]) {
     const float rel[4] = {world.x - cam.origin.x, world.y - cam.origin.y, world.z - cam.origin.z, 1.0f};
     for (int r = 0; r < 4; ++r) {
         out[r] = 0;
@@ -196,13 +321,13 @@ static void ToViewSpace4(const CameraState& cam, const Vec3& world, float out[4]
     }
 }
 
-Vec3 ToViewSpace(const CameraState& cam, const Vec3& world) {
+Vec3 ToViewSpace(const GameState& cam, const Vec3& world) {
     float v[4];
     ToViewSpace4(cam, world, v);
     return {v[0], v[1], v[2]};
 }
 
-bool WorldToScreen(const CameraState& cam, const Vec3& world, float screenW, float screenH, float& outX,
+bool WorldToScreen(const GameState& cam, const Vec3& world, float screenW, float screenH, float& outX,
                    float& outY) {
     float viewSpace[4];
     ToViewSpace4(cam, world, viewSpace);

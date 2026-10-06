@@ -12,6 +12,7 @@
 static DWORD WINAPI InitThread(LPVOID) {
     LoadConfig();
     LoadWaypoints();
+    LoadSettings();
     Log("Injected");
 
     if (MH_Initialize() != MH_OK) {

@@ -13,6 +13,37 @@ namespace {
 
 constexpr int kConfigVersion = 2;
 
+struct NumericField {
+    const char* key;
+    uintptr_t Offsets::* member;
+};
+
+constexpr NumericField kNumericFields[] = {
+    {"uiContextClientInstance", &Offsets::uiContextClientInstance},
+    {"clientInstanceMinecraftGame", &Offsets::clientInstanceMinecraftGame},
+    {"minecraftGameGameRenderer", &Offsets::minecraftGameGameRenderer},
+    {"gameRendererViewMatrix", &Offsets::gameRendererViewMatrix},
+    {"gameRendererProjMatrix", &Offsets::gameRendererProjMatrix},
+    {"clientInstanceLevelRenderer", &Offsets::clientInstanceLevelRenderer},
+    {"clientInstanceGetLevelRenderer", &Offsets::clientInstanceGetLevelRenderer},
+    {"levelRendererPlayer", &Offsets::levelRendererPlayer},
+    {"levelRendererPlayerCameraPos", &Offsets::levelRendererPlayerCameraPos},
+    {"clientInstanceGetLocalPlayer", &Offsets::clientInstanceGetLocalPlayer},
+    {"actorStateVector", &Offsets::actorStateVector},
+    {"actorDimension", &Offsets::actorDimension},
+    {"dimensionName", &Offsets::dimensionName},
+    {"clientInstanceMinecraft", &Offsets::clientInstanceMinecraft},
+    {"minecraftGameSession", &Offsets::minecraftGameSession},
+    {"gameSessionHasLevel", &Offsets::gameSessionHasLevel},
+    {"gameSessionLevelState", &Offsets::gameSessionLevelState},
+    {"gameSessionLevel", &Offsets::gameSessionLevel},
+    {"levelLevelData", &Offsets::levelLevelData},
+    {"levelDataName", &Offsets::levelDataName},
+    {"screenViewVisualTree", &Offsets::screenViewVisualTree},
+    {"visualTreeRoot", &Offsets::visualTreeRoot},
+    {"uiControlName", &Offsets::uiControlName},
+};
+
 std::string Trim(const std::string& s) {
     const auto b = s.find_first_not_of(" \t\r\n");
     if (b == std::string::npos) return {};
@@ -27,6 +58,12 @@ bool ParseNumber(const std::string& value, uintptr_t& out) {
     } catch (...) {
         return false;
     }
+}
+
+std::string Hex(uintptr_t v) {
+    char text[32];
+    snprintf(text, sizeof(text), "0x%llX", static_cast<unsigned long long>(v));
+    return text;
 }
 
 // key=value lines, ignoring blank lines and ; or # comments.
@@ -45,35 +82,25 @@ std::map<std::string, std::string> ReadIni(const std::filesystem::path& path) {
     return values;
 }
 
-void WriteDefaultConfig(const std::filesystem::path& path, int menuKey) {
+void WriteDefaultConfig(const std::filesystem::path& path) {
     std::string profiles;
     for (const auto& p : BuiltInProfiles()) profiles += ", " + p.name;
-
-    char key[16];
-    snprintf(key, sizeof(key), "0x%X", menuKey);
 
     const Offsets& d = BuiltInProfiles().front();
     std::ofstream f(path);
     f << "; Bedrock Waypoints config\n"
       << "configVersion=" << kConfigVersion << "\n\n"
-      << "; Virtual-key code of the menu key (0x77 = F8, 0x2D = Insert, 0xA1 = Right Shift)\n"
-      << "menuKey=" << key << "\n\n"
+      << "; Virtual-key codes (0x76 = F7, 0x77 = F8, 0x2D = Insert, 0xA1 = Right Shift)\n"
+      << "menuKey=" << Hex(g_config.menuKey) << "\n"
+      << "addWaypointKey=" << Hex(g_config.addWaypointKey) << "\n\n"
       << "; Which Minecraft version profile to use: auto" << profiles << "\n"
       << "profile=auto\n\n"
       << "; After a Minecraft update the built-in profiles can stop working.\n"
       << "; Remove the ; in front of a line below to override that value. Delete this file to reset.\n"
       << ";setupAndRenderSig=" << d.setupAndRenderSig << "\n"
       << ";sigIsCall=" << (d.sigIsCall ? 1 : 0) << "\n"
-      << ";uiContextClientInstance=0x" << std::hex << std::uppercase << d.uiContextClientInstance << "\n"
-      << ";clientInstanceMinecraftGame=0x" << d.clientInstanceMinecraftGame << "\n"
-      << ";minecraftGameGameRenderer=0x" << d.minecraftGameGameRenderer << "\n"
-      << ";gameRendererViewMatrix=0x" << d.gameRendererViewMatrix << "\n"
-      << ";gameRendererProjMatrix=0x" << d.gameRendererProjMatrix << "\n"
-      << "; LevelRenderer member offset, or 0 to call the virtual function clientInstanceGetLevelRenderer (decimal index)\n"
-      << ";clientInstanceLevelRenderer=0x" << d.clientInstanceLevelRenderer << "\n"
-      << std::dec << ";clientInstanceGetLevelRenderer=" << d.clientInstanceGetLevelRenderer << "\n"
-      << ";levelRendererPlayer=0x" << std::hex << d.levelRendererPlayer << "\n"
-      << ";levelRendererPlayerCameraPos=0x" << d.levelRendererPlayerCameraPos << "\n";
+      << "; Values ending in GetLevelRenderer/GetLocalPlayer are vtable indexes.\n";
+    for (const auto& field : kNumericFields) f << ";" << field.key << "=" << Hex(d.*field.member) << "\n";
 }
 
 } // namespace
@@ -95,9 +122,23 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v2650.clientInstanceLevelRenderer = 0x1C0;
         v2650.levelRendererPlayer = 0x468;
         v2650.levelRendererPlayerCameraPos = 0x660;
+        v2650.clientInstanceGetLocalPlayer = 0x1F;
+        v2650.actorStateVector = 0x218;
+        v2650.actorDimension = 0x1C8;
+        v2650.dimensionName = 0x20;
+        v2650.clientInstanceMinecraft = 0x1B0;
+        v2650.minecraftGameSession = 0xC8;
+        v2650.gameSessionHasLevel = 0x28;
+        v2650.gameSessionLevelState = 0x30;
+        v2650.gameSessionLevel = 0x40;
+        v2650.levelLevelData = 0x90;
+        v2650.levelDataName = 0x2A8;
+        v2650.screenViewVisualTree = 0x50;
+        v2650.visualTreeRoot = 0x8;
+        v2650.uiControlName = 0x20;
         list.push_back(v2650);
 
-        // Values from the Flarial client (github.com/flarialmc/dll).
+        // Values from the Flarial client (github.com/flarialmc/dll). Camera only.
         Offsets v260;
         v260.name = "1.26.0-1.26.3";
         v260.setupAndRenderSig =
@@ -119,20 +160,9 @@ const std::vector<Offsets>& BuiltInProfiles() {
 }
 
 void ApplyOverrides(Offsets& o) {
-    const std::pair<const char*, uintptr_t*> numbers[] = {
-        {"uiContextClientInstance", &o.uiContextClientInstance},
-        {"clientInstanceMinecraftGame", &o.clientInstanceMinecraftGame},
-        {"minecraftGameGameRenderer", &o.minecraftGameGameRenderer},
-        {"gameRendererViewMatrix", &o.gameRendererViewMatrix},
-        {"gameRendererProjMatrix", &o.gameRendererProjMatrix},
-        {"clientInstanceLevelRenderer", &o.clientInstanceLevelRenderer},
-        {"clientInstanceGetLevelRenderer", &o.clientInstanceGetLevelRenderer},
-        {"levelRendererPlayer", &o.levelRendererPlayer},
-        {"levelRendererPlayerCameraPos", &o.levelRendererPlayerCameraPos},
-    };
-    for (const auto& [key, field] : numbers) {
-        const auto it = g_config.overrides.find(key);
-        if (it != g_config.overrides.end()) ParseNumber(it->second, *field);
+    for (const auto& field : kNumericFields) {
+        const auto it = g_config.overrides.find(field.key);
+        if (it != g_config.overrides.end()) ParseNumber(it->second, o.*field.member);
     }
     if (const auto it = g_config.overrides.find("setupAndRenderSig"); it != g_config.overrides.end()) {
         o.setupAndRenderSig = it->second;
@@ -177,6 +207,9 @@ void LoadConfig() {
     if (auto it = values.find("menuKey"); it != values.end() && ParseNumber(it->second, number)) {
         g_config.menuKey = static_cast<int>(number);
     }
+    if (auto it = values.find("addWaypointKey"); it != values.end() && ParseNumber(it->second, number)) {
+        g_config.addWaypointKey = static_cast<int>(number);
+    }
 
     // Older config files listed every offset uncommented, which would pin the old version's values.
     if (!values.count("configVersion") || values["configVersion"] != std::to_string(kConfigVersion)) {
@@ -185,11 +218,11 @@ void LoadConfig() {
             std::filesystem::rename(path, DataDir() / L"config.old.ini", ec);
             Log("Old config.ini moved to config.old.ini");
         }
-        WriteDefaultConfig(path, g_config.menuKey);
+        WriteDefaultConfig(path);
         return;
     }
 
     if (auto it = values.find("profile"); it != values.end()) g_config.profile = it->second;
-    for (const char* key : {"configVersion", "menuKey", "profile"}) values.erase(key);
+    for (const char* key : {"configVersion", "menuKey", "addWaypointKey", "profile"}) values.erase(key);
     g_config.overrides = std::move(values);
 }

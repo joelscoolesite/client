@@ -14,10 +14,25 @@ Elke push bouwt de DLL automatisch op GitHub:
 1. Start Minecraft en ga een wereld of server in.
 2. Injecteer `BedrockWaypoints.dll` met je injector.
 3. Druk op **Esc** (zodat je muis vrij is) en daarna op **F8** om het menu te openen.
-4. Vul een **Name** en **X Y Z** in (of klik **Use my position**) en klik **Add**.
-5. Sluit het menu met **F8** of het kruisje.
 
-Waypoints worden opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\waypoints.txt`, dus ze blijven bewaard na herstarten.
+Het menu heeft drie tabbladen:
+
+- **Waypoints**: al je waypoints. Met **Edit** pas je naam, coördinaten, kleur, dimensie en wereld aan.
+- **Add**: nieuwe waypoint maken. Vul **Name** en **X Y Z** in (of klik **Use my position**) en klik **Add**.
+  Met de knoppen **Overworld -> Nether** en **Nether -> Overworld** reken je de coördinaten om.
+- **Settings**: straal, afstand, Nether-omrekening en death waypoints aan/uit.
+
+Extra functies:
+
+- **F7** zet meteen een waypoint op de plek waar je staat.
+- **Death waypoints**: als je doodgaat komt er automatisch een rode `Death` waypoint. Alleen de laatste 3 worden
+  bewaard (aan te passen in Settings).
+- **Per wereld en dimensie**: een waypoint verschijnt alleen in de wereld en dimensie waarin je hem maakte.
+- **Always load (every world)**: vink dit aan en de waypoint is er altijd, in elke wereld en op elke server,
+  elke keer dat je injecteert.
+- **Nether-omrekening**: overworld-waypoints zie je in de Nether op /8 en Nether-waypoints in de overworld op x8.
+
+Alles wordt opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\` (`waypoints.txt` en `settings.ini`).
 
 ## Na een Minecraft update
 
@@ -36,7 +51,7 @@ Nieuwe waarden kun je zonder opnieuw bouwen invullen in `%LOCALAPPDATA%\BedrockW
 weg voor een regel en pas de waarde aan. Verwijder `config.ini` om terug te gaan naar de standaardwaarden.
 In `log.txt` in dezelfde map zie je wat er gebeurde.
 
-In `config.ini` kun je ook een andere menu-toets kiezen (`menuKey`, bijv. `0x2D` voor Insert).
+In `config.ini` kun je ook andere toetsen kiezen: `menuKey` (menu) en `addWaypointKey` (snelle waypoint), bijv. `0x2D` voor Insert.
 
 ## Zelf bouwen
 
