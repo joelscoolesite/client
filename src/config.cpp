@@ -42,6 +42,12 @@ constexpr NumericField kNumericFields[] = {
     {"screenViewVisualTree", &Offsets::screenViewVisualTree},
     {"visualTreeRoot", &Offsets::visualTreeRoot},
     {"uiControlName", &Offsets::uiControlName},
+    {"levelRendererPlayerFovX", &Offsets::levelRendererPlayerFovX},
+    {"levelRendererPlayerFovY", &Offsets::levelRendererPlayerFovY},
+    {"clientInstanceGuiData", &Offsets::clientInstanceGuiData},
+    {"guiDataMessages", &Offsets::guiDataMessages},
+    {"guiMessageSize", &Offsets::guiMessageSize},
+    {"guiMessageText", &Offsets::guiMessageText},
 };
 
 std::string Trim(const std::string& s) {
@@ -99,6 +105,9 @@ void WriteDefaultConfig(const std::filesystem::path& path) {
       << "; Remove the ; in front of a line below to override that value. Delete this file to reset.\n"
       << ";setupAndRenderSig=" << d.setupAndRenderSig << "\n"
       << ";sigIsCall=" << (d.sigIsCall ? 1 : 0) << "\n"
+      << ";renderLevelSig=" << d.renderLevelSig << "\n"
+      << ";renderLevelSigIsCall=" << (d.renderLevelSigIsCall ? 1 : 0) << "\n"
+      << ";gammaSig=" << d.gammaSig << "\n"
       << "; Values ending in GetLevelRenderer/GetLocalPlayer are vtable indexes.\n";
     for (const auto& field : kNumericFields) f << ";" << field.key << "=" << Hex(d.*field.member) << "\n";
 }
@@ -136,6 +145,15 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v2650.screenViewVisualTree = 0x50;
         v2650.visualTreeRoot = 0x8;
         v2650.uiControlName = 0x20;
+        v2650.renderLevelSig = "E8 ? ? ? ? 45 31 E4 48 83 BE";
+        v2650.renderLevelSigIsCall = true;
+        v2650.levelRendererPlayerFovX = 0xF58;
+        v2650.levelRendererPlayerFovY = 0xF6C;
+        v2650.gammaSig = "48 83 EC 38 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 48 8B 01 48 8B 40 08 48 8D 54 24 ? 41 B8 32 00 00 00";
+        v2650.clientInstanceGuiData = 0x650;
+        v2650.guiDataMessages = 0x150;
+        v2650.guiMessageSize = 0x110;
+        v2650.guiMessageText = 0x8;
         list.push_back(v2650);
 
         // Values from the Flarial client (github.com/flarialmc/dll). Camera only.
@@ -169,6 +187,15 @@ void ApplyOverrides(Offsets& o) {
     }
     if (const auto it = g_config.overrides.find("sigIsCall"); it != g_config.overrides.end()) {
         o.sigIsCall = it->second != "0";
+    }
+    if (const auto it = g_config.overrides.find("renderLevelSig"); it != g_config.overrides.end()) {
+        o.renderLevelSig = it->second;
+    }
+    if (const auto it = g_config.overrides.find("renderLevelSigIsCall"); it != g_config.overrides.end()) {
+        o.renderLevelSigIsCall = it->second != "0";
+    }
+    if (const auto it = g_config.overrides.find("gammaSig"); it != g_config.overrides.end()) {
+        o.gammaSig = it->second;
     }
 }
 

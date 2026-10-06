@@ -43,6 +43,8 @@ add_library(BedrockWaypoints SHARED
     src/dllmain.cpp
     src/config.cpp
     src/game.cpp
+    src/input.cpp
+    src/modules.cpp
     src/render.cpp
     src/ui.cpp
     src/waypoints.cpp)

@@ -28,6 +28,11 @@ struct DeathInfo {
     char world[128]{};
 };
 
+struct ChatCoords {
+    Vec3 pos;
+    std::string text; // the chat line it came from
+};
+
 namespace game {
 
 // Finds the game function and hooks it. Returns false and fills `error` on failure.
@@ -37,6 +42,19 @@ bool Init(std::string& error);
 std::string GameVersion();
 
 GameState State();
+
+// Zoom factor (1 = normal) and gamma override (< 0 = game value). Safe from any thread.
+void SetZoom(float factor);
+void SetGamma(float gamma);
+bool ZoomAvailable();
+bool GammaAvailable();
+bool ChatAvailable();
+
+// Coordinates someone typed in chat, oldest first.
+bool PollChatCoords(ChatCoords& out);
+
+// Horizontal facing in degrees: 0 = north, 90 = east, 180 = south, 270 = west.
+float Heading(const GameState& state);
 
 // Returns true once for every time the death screen appears.
 bool PollDeath(DeathInfo& out);

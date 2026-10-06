@@ -1,6 +1,7 @@
 #include "render.h"
 
 #include "config.h"
+#include "input.h"
 #include "ui.h"
 
 #include <windows.h>
@@ -14,6 +15,7 @@
 #include <imgui_impl_dx12.h>
 #include <imgui_impl_win32.h>
 
+#include <atomic>
 #include <vector>
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -71,7 +73,9 @@ std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> g_backBufferRtvs;
 // ---------------------------------------------------------------- window input
 
 LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    if (g_imguiReady && ui::MenuOpen()) {
+    const bool menuOpen = g_imguiReady && ui::MenuOpen();
+    if (!menuOpen && input::OnMessage(hwnd, msg, wParam, lParam, g_originalWndProc)) return 0;
+    if (menuOpen) {
         ImGui_ImplWin32_WndProcHandler(hwnd, msg, wParam, lParam);
 
         // Keep the game from reacting to clicks and typing while the menu is open.
@@ -254,9 +258,143 @@ bool InitForSwapChain(IDXGISwapChain* swapChain) {
     return true;
 }
 
+// ---------------------------------------------------------------- screenshot
+
+std::atomic<bool> g_screenshotRequested{false};
+
+// Copies pixels to the clipboard as a 32-bit bitmap. Returns false for formats we can't convert.
+bool PixelsToClipboard(const uint8_t* data, UINT rowPitch, UINT width, UINT height, DXGI_FORMAT format) {
+    const bool rgba = format == DXGI_FORMAT_R8G8B8A8_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+    const bool bgra = format == DXGI_FORMAT_B8G8R8A8_UNORM || format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+    const bool r10 = format == DXGI_FORMAT_R10G10B10A2_UNORM;
+    if (!rgba && !bgra && !r10) return false;
+
+    const size_t imageSize = static_cast<size_t>(width) * height * 4;
+    HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, sizeof(BITMAPINFOHEADER) + imageSize);
+    if (!mem) return false;
+    auto* header = static_cast<BITMAPINFOHEADER*>(GlobalLock(mem));
+    *header = {};
+    header->biSize = sizeof(BITMAPINFOHEADER);
+    header->biWidth = static_cast<LONG>(width);
+    header->biHeight = static_cast<LONG>(height); // bottom-up
+    header->biPlanes = 1;
+    header->biBitCount = 32;
+    header->biCompression = BI_RGB;
+    auto* out = reinterpret_cast<uint8_t*>(header + 1);
+
+    for (UINT y = 0; y < height; ++y) {
+        const uint8_t* src = data + static_cast<size_t>(y) * rowPitch;
+        uint8_t* dst = out + static_cast<size_t>(height - 1 - y) * width * 4;
+        for (UINT x = 0; x < width; ++x, src += 4, dst += 4) {
+            if (r10) {
+                const uint32_t v = *reinterpret_cast<const uint32_t*>(src);
+                dst[2] = static_cast<uint8_t>((v & 0x3FF) >> 2);
+                dst[1] = static_cast<uint8_t>(((v >> 10) & 0x3FF) >> 2);
+                dst[0] = static_cast<uint8_t>(((v >> 20) & 0x3FF) >> 2);
+            } else {
+                dst[0] = src[rgba ? 2 : 0];
+                dst[1] = src[1];
+                dst[2] = src[rgba ? 0 : 2];
+            }
+            dst[3] = 255;
+        }
+    }
+    GlobalUnlock(mem);
+
+    if (!OpenClipboard(nullptr)) {
+        GlobalFree(mem);
+        return false;
+    }
+    EmptyClipboard();
+    const bool ok = SetClipboardData(CF_DIB, mem) != nullptr;
+    CloseClipboard();
+    if (!ok) GlobalFree(mem);
+    return ok;
+}
+
+void CaptureDx11(IDXGISwapChain* swapChain) {
+    ID3D11Texture2D* backBuffer = nullptr;
+    if (FAILED(swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer)))) return;
+    D3D11_TEXTURE2D_DESC desc;
+    backBuffer->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+    ID3D11Texture2D* staging = nullptr;
+    bool ok = false;
+    if (SUCCEEDED(g_d3d11Device->CreateTexture2D(&desc, nullptr, &staging))) {
+        g_d3d11Context->CopyResource(staging, backBuffer);
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        if (SUCCEEDED(g_d3d11Context->Map(staging, 0, D3D11_MAP_READ, 0, &mapped))) {
+            ok = PixelsToClipboard(static_cast<const uint8_t*>(mapped.pData), mapped.RowPitch, desc.Width,
+                                   desc.Height, desc.Format);
+            g_d3d11Context->Unmap(staging, 0);
+        }
+        staging->Release();
+    }
+    backBuffer->Release();
+    ui::Notify("Screenshot", ok ? "Copied to clipboard" : "Could not copy this screen format");
+}
+
+// DX12: records a copy of the back buffer into a readback buffer. Read it after the GPU is done.
+struct Dx12Capture {
+    ID3D12Resource* buffer = nullptr;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+};
+
+bool RecordDx12Capture(ID3D12Resource* backBuffer, Dx12Capture& capture) {
+    const D3D12_RESOURCE_DESC desc = backBuffer->GetDesc();
+    UINT64 totalSize = 0;
+    g_d3d12Device->GetCopyableFootprints(&desc, 0, 1, 0, &capture.footprint, nullptr, nullptr, &totalSize);
+    capture.format = desc.Format;
+
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC bufferDesc{};
+    bufferDesc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    bufferDesc.Width = totalSize;
+    bufferDesc.Height = 1;
+    bufferDesc.DepthOrArraySize = 1;
+    bufferDesc.MipLevels = 1;
+    bufferDesc.SampleDesc.Count = 1;
+    bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    if (FAILED(g_d3d12Device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                                      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                      IID_PPV_ARGS(&capture.buffer))))
+        return false;
+
+    D3D12_TEXTURE_COPY_LOCATION dst{};
+    dst.pResource = capture.buffer;
+    dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = capture.footprint;
+    D3D12_TEXTURE_COPY_LOCATION src{};
+    src.pResource = backBuffer;
+    src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    src.SubresourceIndex = 0;
+    g_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    return true;
+}
+
+void FinishDx12Capture(Dx12Capture& capture) {
+    bool ok = false;
+    void* data = nullptr;
+    if (SUCCEEDED(capture.buffer->Map(0, nullptr, &data))) {
+        ok = PixelsToClipboard(static_cast<const uint8_t*>(data), capture.footprint.Footprint.RowPitch,
+                               capture.footprint.Footprint.Width, capture.footprint.Footprint.Height,
+                               capture.format);
+        capture.buffer->Unmap(0, nullptr);
+    }
+    SafeRelease(capture.buffer);
+    ui::Notify("Screenshot", ok ? "Copied to clipboard" : "Could not copy this screen format");
+}
+
 // ---------------------------------------------------------------- per frame
 
-void RenderDx11() {
+void RenderDx11(IDXGISwapChain* swapChain) {
+    // Capture before drawing the overlay so the screenshot shows only the game.
+    if (g_screenshotRequested.exchange(false)) CaptureDx11(swapChain);
     ImGui_ImplDX11_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -293,6 +431,15 @@ void RenderDx12(IDXGISwapChain* swapChain) {
     barrier.Transition.pResource = g_backBuffers[backBufferIndex];
     barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
     barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+
+    // Copy the frame before drawing the overlay so the screenshot shows only the game.
+    Dx12Capture capture;
+    if (g_screenshotRequested.exchange(false)) {
+        barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+        g_commandList->ResourceBarrier(1, &barrier);
+        RecordDx12Capture(g_backBuffers[backBufferIndex], capture);
+        barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    }
     barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_RENDER_TARGET;
     g_commandList->ResourceBarrier(1, &barrier);
 
@@ -309,6 +456,14 @@ void RenderDx12(IDXGISwapChain* swapChain) {
     g_originalExecuteCommandLists(g_commandQueue, 1, lists);
     frame.fenceValue = ++g_fenceValue;
     g_commandQueue->Signal(g_fence, frame.fenceValue);
+
+    if (capture.buffer) {
+        if (g_fence->GetCompletedValue() < frame.fenceValue) {
+            g_fence->SetEventOnCompletion(frame.fenceValue, g_fenceEvent);
+            WaitForSingleObject(g_fenceEvent, 2000);
+        }
+        FinishDx12Capture(capture);
+    }
 }
 
 // ---------------------------------------------------------------- hooks
@@ -320,7 +475,7 @@ HRESULT STDMETHODCALLTYPE PresentDetour(IDXGISwapChain* swapChain, UINT syncInte
         if (g_imguiReady && swapChain == g_swapChain) {
             const bool haveTarget = g_api == Api::DX11 ? g_d3d11Rtv != nullptr : !g_backBuffers.empty();
             if (haveTarget || CreateBackBuffers(swapChain)) {
-                if (g_api == Api::DX11) RenderDx11();
+                if (g_api == Api::DX11) RenderDx11(swapChain);
                 else RenderDx12(swapChain);
             }
         }
@@ -438,6 +593,10 @@ bool Hook(void* target, void* detour, void** original) {
 } // namespace
 
 namespace render {
+
+void RequestScreenshot() {
+    g_screenshotRequested = true;
+}
 
 bool Init(std::string& error) {
     VTables vt;

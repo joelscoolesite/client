@@ -1,4 +1,4 @@
-# Bedrock Waypoints
+# Nova Client
 
 Een DLL voor Minecraft Bedrock (Windows) die waypoints in je scherm tekent. Je typt coördinaten in, en je ziet een
 marker met naam, afstand en een lichtstraal op die plek. Staat de waypoint buiten beeld, dan wijst een pijltje aan de
@@ -13,26 +13,32 @@ Elke push bouwt de DLL automatisch op GitHub:
 
 1. Start Minecraft en ga een wereld of server in.
 2. Injecteer `BedrockWaypoints.dll` met je injector.
-3. Druk op **Esc** (zodat je muis vrij is) en daarna op **F8** om het menu te openen.
+3. Druk op **Esc** (zodat je muis vrij is) en daarna op **F8** voor het menu.
 
-Het menu heeft drie tabbladen:
+Het menu heeft een zijbalk met **HUD**, **Visual**, **Utility**, **Waypoints** en **Settings**. Elke module heeft een
+schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaart). Met de zoekbalk vind je snel een module.
 
-- **Waypoints**: al je waypoints. Met **Edit** pas je naam, coördinaten, kleur, dimensie en wereld aan.
-- **Add**: nieuwe waypoint maken. Vul **Name** en **X Y Z** in (of klik **Use my position**) en klik **Add**.
-  Met de knoppen **Overworld -> Nether** en **Nether -> Overworld** reken je de coördinaten om.
-- **Settings**: straal, afstand, Nether-omrekening en death waypoints aan/uit.
+| Module | Wat het doet |
+| --- | --- |
+| Coordinates | Je positie, Nether/Overworld-coördinaten en kijkrichting |
+| Compass | Kompasbalk bovenin, met je waypoints als stipjes |
+| FPS / CPS | Frames per seconde en clicks per seconde |
+| Clock | Tijd en sessie-timer |
+| Keystrokes | W A S D, muisknoppen (met CPS) en spatie |
+| Chunk Borders | Randen van de chunk waar je in staat |
+| Fullbright | Alles helder |
+| Zoom | Houd **C** ingedrukt om in te zoomen |
+| Toggle Sprint | Sprint/sneak één keer indrukken om aan te houden (experimenteel) |
+| Chat Coordinates | Ziet coördinaten in chat en laat je er een waypoint van maken |
+| Screenshot | **F6** kopieert het scherm naar je klembord |
 
-Extra functies:
+**Settings**: accentkleur, HUD-achtergrond, notificaties, **Edit HUD layout** (HUD-elementen verslepen, scrollen
+om groter/kleiner te maken) en **profielen** (instellingen opslaan en wisselen).
 
-- **F7** zet meteen een waypoint op de plek waar je staat.
-- **Death waypoints**: als je doodgaat komt er automatisch een rode `Death` waypoint. Alleen de laatste 3 worden
-  bewaard (aan te passen in Settings).
-- **Per wereld en dimensie**: een waypoint verschijnt alleen in de wereld en dimensie waarin je hem maakte.
-- **Always load (every world)**: vink dit aan en de waypoint is er altijd, in elke wereld en op elke server,
-  elke keer dat je injecteert.
-- **Nether-omrekening**: overworld-waypoints zie je in de Nether op /8 en Nether-waypoints in de overworld op x8.
+**Waypoints**: lijst (met **Edit** en **Copy** om in chat te plakken), **Add** en **Options**. **F7** zet een waypoint
+waar je staat. Death waypoints, per wereld/dimensie, **Always load** en Nether-omrekening werken zoals voorheen.
 
-Alles wordt opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\` (`waypoints.txt` en `settings.ini`).
+Alles wordt opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\` (`waypoints.txt`, `settings.ini`, `profiles\`).
 
 ## Na een Minecraft update
 

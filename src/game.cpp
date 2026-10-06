@@ -10,7 +10,11 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <atomic>
+#include <deque>
 #include <optional>
+#include <regex>
+#include <unordered_set>
 #include <set>
 #include <string>
 #include <vector>
@@ -217,6 +221,133 @@ void CheckScreen(uintptr_t screenView) {
     Log("Death screen seen, saving death waypoint");
 }
 
+// ---------------------------------------------------------------- zoom / fullbright
+
+std::atomic<float> g_zoom{1.0f};
+std::atomic<float> g_gamma{-1.0f};
+bool g_zoomHooked = false;
+bool g_gammaHooked = false;
+
+using RenderLevelFn = void(__fastcall*)(void*, void*, void*);
+RenderLevelFn g_originalRenderLevel = nullptr;
+using GetGammaFn = float(__fastcall*)(void*, void*);
+GetGammaFn g_originalGetGamma = nullptr;
+
+bool ApplyZoomUnsafe(uintptr_t levelRenderer, float zoom) {
+    const Offsets& c = g_offsets;
+    const auto player = Read<uintptr_t>(levelRenderer + c.levelRendererPlayer);
+    if (!player) return false;
+    *reinterpret_cast<float*>(player + c.levelRendererPlayerFovX) *= zoom;
+    *reinterpret_cast<float*>(player + c.levelRendererPlayerFovY) *= zoom;
+    return true;
+}
+
+bool ApplyZoom(uintptr_t levelRenderer, float zoom) {
+    GUARDED(ApplyZoomUnsafe(levelRenderer, zoom))
+}
+
+void __fastcall RenderLevelDetour(void* levelRenderer, void* screenContext, void* unk) {
+    g_originalRenderLevel(levelRenderer, screenContext, unk);
+    // Same as Latite: the FOV is scaled after rendering and picked up by the next frame.
+    const float zoom = g_zoom.load();
+    if (zoom > 1.001f && levelRenderer) ApplyZoom(reinterpret_cast<uintptr_t>(levelRenderer), zoom);
+}
+
+float __fastcall GetGammaDetour(void* options, void* unk) {
+    const float original = g_originalGetGamma(options, unk);
+    const float gamma = g_gamma.load();
+    return gamma >= 0 ? gamma : original;
+}
+
+// ---------------------------------------------------------------- chat
+
+constexpr size_t kMaxChat = 64;
+char g_chatText[kMaxChat][256];
+
+size_t ReadChatUnsafe(uintptr_t clientInstance) {
+    const Offsets& c = g_offsets;
+    if (!c.clientInstanceGuiData || !c.guiMessageSize) return 0;
+    const auto guiData = Read<uintptr_t>(clientInstance + c.clientInstanceGuiData);
+    if (!guiData) return 0;
+    const auto begin = Read<uintptr_t>(guiData + c.guiDataMessages);
+    const auto end = Read<uintptr_t>(guiData + c.guiDataMessages + 8);
+    if (!begin || end < begin) return 0;
+    size_t count = (end - begin) / c.guiMessageSize;
+    if (count > kMaxChat) count = kMaxChat;
+    for (size_t i = 0; i < count; ++i)
+        ReadString(begin + i * c.guiMessageSize + c.guiMessageText, g_chatText[i], sizeof(g_chatText[i]));
+    return count;
+}
+
+size_t ReadChat(uintptr_t clientInstance) {
+#ifdef _MSC_VER
+    __try {
+        return ReadChatUnsafe(clientInstance);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+#else
+    return ReadChatUnsafe(clientInstance);
+#endif
+}
+
+std::mutex g_chatMutex;
+std::deque<ChatCoords> g_chatCoords;
+std::unordered_set<size_t> g_seenChat;
+bool g_chatPrimed = false;
+
+// Finds "x y z" (also "x, y, z" or "x/y/z") in a chat line.
+bool ParseCoords(const char* text, Vec3& out) {
+    static const std::regex pattern(R"((-?\d{1,8})[\s,/]+(-?\d{1,3})[\s,/]+(-?\d{1,8}))");
+    std::cmatch m;
+    if (!std::regex_search(text, m, pattern)) return false;
+    const int y = std::stoi(m[2].str());
+    if (y < -64 || y > 320) return false;
+    out = {std::stof(m[1].str()), static_cast<float>(y), std::stof(m[3].str())};
+    return true;
+}
+
+void CheckChat(uintptr_t clientInstance) {
+    const size_t count = ReadChat(clientInstance);
+    for (size_t i = 0; i < count; ++i) {
+        // Strip Minecraft colour codes (section sign + one character).
+        std::string text;
+        for (const char* p = g_chatText[i]; *p; ++p) {
+            if (static_cast<unsigned char>(p[0]) == 0xC2 && static_cast<unsigned char>(p[1]) == 0xA7 && p[2]) {
+                p += 2;
+                continue;
+            }
+            text += *p;
+        }
+        if (!g_seenChat.insert(std::hash<std::string>{}(text)).second || !g_chatPrimed) continue;
+
+        ChatCoords found;
+        if (!ParseCoords(text.c_str(), found.pos)) continue;
+        found.text = text.substr(0, 120);
+        std::lock_guard lock(g_chatMutex);
+        g_chatCoords.push_back(found);
+        if (g_chatCoords.size() > 10) g_chatCoords.pop_front();
+    }
+    g_chatPrimed = true; // messages that were already there when we injected are ignored
+}
+
+bool InstallHook(const std::string& sig, bool isCall, void* detour, void** original, const char* name) {
+    if (sig.empty()) return false;
+    auto address = FindPattern(sig);
+    if (!address) {
+        Log(std::string(name) + ": signature not found");
+        return false;
+    }
+    if (isCall) *address += 5 + *reinterpret_cast<int32_t*>(*address + 1);
+    if (MH_CreateHook(reinterpret_cast<void*>(*address), detour, original) != MH_OK ||
+        MH_EnableHook(reinterpret_cast<void*>(*address)) != MH_OK) {
+        Log(std::string(name) + ": hook failed");
+        return false;
+    }
+    Log(std::string(name) + ": hooked");
+    return true;
+}
+
 void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     g_originalSetupAndRender(screenView, uiRenderContext);
 
@@ -231,6 +362,7 @@ void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     if (!state.valid) return;
     state.hasPlayer = ReadPlayer(clientInstance, state);
     ReadWorld(clientInstance, state);
+    CheckChat(clientInstance);
 
     // setupAndRender runs once per screen layer; keep the last good snapshot.
     std::lock_guard lock(g_stateMutex);
@@ -289,6 +421,11 @@ bool Init(std::string& error) {
             return false;
         }
         Log("Using profile " + candidate.name);
+        g_zoomHooked = InstallHook(candidate.renderLevelSig, candidate.renderLevelSigIsCall,
+                                   reinterpret_cast<void*>(&RenderLevelDetour),
+                                   reinterpret_cast<void**>(&g_originalRenderLevel), "renderLevel");
+        g_gammaHooked = InstallHook(candidate.gammaSig, false, reinterpret_cast<void*>(&GetGammaDetour),
+                                    reinterpret_cast<void**>(&g_originalGetGamma), "getGamma");
         return true;
     }
 
@@ -302,6 +439,50 @@ GameState State() {
     // No fresh snapshot means we left the world (main menu, loading screen).
     if (GetTickCount64() - g_lastValidTick > 500) state.valid = false;
     return state;
+}
+
+void SetZoom(float factor) {
+    g_zoom = factor;
+}
+
+void SetGamma(float gamma) {
+    g_gamma = gamma;
+}
+
+bool ZoomAvailable() {
+    return g_zoomHooked && g_offsets.levelRendererPlayerFovX;
+}
+
+bool GammaAvailable() {
+    return g_gammaHooked;
+}
+
+bool ChatAvailable() {
+    return g_offsets.clientInstanceGuiData != 0;
+}
+
+bool PollChatCoords(ChatCoords& out) {
+    std::lock_guard lock(g_chatMutex);
+    if (g_chatCoords.empty()) return false;
+    out = g_chatCoords.front();
+    g_chatCoords.pop_front();
+    return true;
+}
+
+Vec3 Forward(const GameState& state) {
+    // Third row of the view matrix is the camera's back (or forward) axis in world space.
+    Vec3 f{state.view[0 * 4 + 2], state.view[1 * 4 + 2], state.view[2 * 4 + 2]};
+    const Vec3 ahead{state.origin.x + f.x * 10, state.origin.y + f.y * 10, state.origin.z + f.z * 10};
+    float x, y;
+    if (WorldToScreen(state, ahead, 100, 100, x, y) == false) f = {-f.x, -f.y, -f.z};
+    return f;
+}
+
+float Heading(const GameState& state) {
+    const Vec3 f = Forward(state);
+    float deg = std::atan2(f.x, -f.z) * 57.29578f; // 0 = north (-Z), 90 = east (+X)
+    if (deg < 0) deg += 360;
+    return deg;
 }
 
 bool PollDeath(DeathInfo& out) {

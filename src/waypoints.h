@@ -32,5 +32,12 @@ void SaveWaypoints();
 void LoadSettings();
 void SaveSettings();
 
+// Coordinates found in chat, newest last (shown in the Waypoints page).
+extern std::vector<ChatCoords> g_chatFound;
+
+// Where to draw a waypoint right now, or false if it belongs to another world or dimension.
+// `converted` is true when the position was converted between overworld and nether.
+bool WaypointDisplayPosition(const Waypoint& w, const GameState& state, Vec3& out, bool& converted);
+
 // Friendly name for a dimension id: "Overworld", "Nether", "The End".
 const char* DimensionLabel(const std::string& dimension);

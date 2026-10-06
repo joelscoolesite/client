@@ -44,6 +44,21 @@ struct Offsets {
     uintptr_t screenViewVisualTree = 0; // ScreenView -> VisualTree*
     uintptr_t visualTreeRoot = 0;       // VisualTree -> UIControl*
     uintptr_t uiControlName = 0;        // UIControl -> std::string
+
+    // Zoom: LevelRenderer::renderLevel(LevelRenderer*, ScreenContext*, void*)
+    std::string renderLevelSig;
+    bool renderLevelSigIsCall = false;
+    uintptr_t levelRendererPlayerFovX = 0; // LevelRendererPlayer -> float
+    uintptr_t levelRendererPlayerFovY = 0; // LevelRendererPlayer -> float
+
+    // Fullbright: float Options::getGamma(Options*, void*)
+    std::string gammaSig;
+
+    // Chat
+    uintptr_t clientInstanceGuiData = 0; // ClientInstance -> GuiData*
+    uintptr_t guiDataMessages = 0;       // GuiData -> std::vector<GuiMessage>
+    uintptr_t guiMessageSize = 0;        // sizeof(GuiMessage)
+    uintptr_t guiMessageText = 0;        // GuiMessage -> std::string
 };
 
 struct Config {

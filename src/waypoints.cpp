@@ -2,11 +2,13 @@
 
 #include "config.h"
 
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
 std::vector<Waypoint> g_waypoints;
 Settings g_settings;
+std::vector<ChatCoords> g_chatFound;
 
 namespace {
 
@@ -103,4 +105,24 @@ const char* DimensionLabel(const std::string& dimension) {
     if (dimension == "Nether") return "Nether";
     if (dimension == "TheEnd") return "The End";
     return dimension.empty() ? "Any" : dimension.c_str();
+}
+
+bool WaypointDisplayPosition(const Waypoint& w, const GameState& state, Vec3& out, bool& converted) {
+    converted = false;
+    if (!w.always && !w.world.empty() && state.world[0] && w.world != state.world) return false;
+
+    out = w.pos;
+    const std::string current = state.dimension;
+    if (w.dimension.empty() || current.empty() || w.dimension == current) return true;
+    if (!g_settings.netherConversion) return false;
+
+    if (w.dimension == "Overworld" && current == "Nether") {
+        out = {std::floor(w.pos.x / 8), w.pos.y, std::floor(w.pos.z / 8)};
+    } else if (w.dimension == "Nether" && current == "Overworld") {
+        out = {w.pos.x * 8, w.pos.y, w.pos.z * 8};
+    } else {
+        return false;
+    }
+    converted = true;
+    return true;
 }
