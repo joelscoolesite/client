@@ -5,6 +5,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -21,3 +24,14 @@ jobs:
         with:
           name: BedrockWaypoints
           path: build/Release/BedrockWaypoints.dll
+
+      # Keeps one "latest" release with the newest DLL, so there is a simple download link.
+      - name: Publish latest build
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest build/Release/BedrockWaypoints.dll --prerelease \
+            --title "Latest build" --notes "Built from ${GITHUB_SHA}" --target "${GITHUB_SHA}"
