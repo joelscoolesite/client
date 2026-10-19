@@ -37,6 +37,7 @@ namespace game {
 
 // Finds the game function and hooks it. Returns false and fills `error` on failure.
 bool Init(std::string& error);
+void Cleanup();
 
 // File version of Minecraft.Windows.exe, e.g. "1.26.5001.0".
 std::string GameVersion();
@@ -46,9 +47,16 @@ GameState State();
 // Zoom factor (1 = normal) and gamma override (< 0 = game value). Safe from any thread.
 void SetZoom(float factor);
 void SetGamma(float gamma);
+void SetDisplayGammaRamp(float gamma);
+void RestoreDisplayGammaRamp();
 bool ZoomAvailable();
 bool GammaAvailable();
+bool IsGammaHooked();
 bool ChatAvailable();
+
+// Screen queries for container and inventory detection
+std::string CurrentScreen();
+bool IsContainerOpen();
 
 // Coordinates someone typed in chat, oldest first.
 bool PollChatCoords(ChatCoords& out);

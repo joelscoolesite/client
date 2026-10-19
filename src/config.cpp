@@ -170,6 +170,7 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v260.clientInstanceGetLevelRenderer = 187;
         v260.levelRendererPlayer = 0x430;
         v260.levelRendererPlayerCameraPos = 0x704;
+        v260.gammaSig = "48 83 EC ? 80 B9 ? ? ? ? ? 48 8D 54 24 ? 48 8B 01 74 ? 41 B8 0D 01 00 00";
         list.push_back(v260);
 
         return list;

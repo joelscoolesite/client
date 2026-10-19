@@ -187,6 +187,10 @@ bool ReadScreenName(uintptr_t screenView, char* out, size_t outSize) {
     GUARDED(ReadScreenNameUnsafe(screenView, out, outSize))
 }
 
+std::mutex g_screenMutex;
+std::string g_currentScreen;
+ULONGLONG g_lastScreenTick = 0;
+
 std::mutex g_deathMutex;
 bool g_deathPending = false;
 DeathInfo g_death;
@@ -196,6 +200,12 @@ std::set<std::string> g_seenScreens;
 void CheckScreen(uintptr_t screenView) {
     char name[64];
     if (!ReadScreenName(screenView, name, sizeof(name))) return;
+
+    {
+        std::lock_guard lock(g_screenMutex);
+        g_currentScreen = name;
+        g_lastScreenTick = GetTickCount64();
+    }
 
     // Log each screen name once, to help with fixing things after an update.
     if (g_seenScreens.size() < 100 && g_seenScreens.insert(name).second) Log(std::string("Screen: ") + name);
@@ -233,6 +243,31 @@ RenderLevelFn g_originalRenderLevel = nullptr;
 using GetGammaFn = float(__fastcall*)(void*, void*);
 GetGammaFn g_originalGetGamma = nullptr;
 
+// Display Gamma Ramp Fallback (using Windows GDI)
+HWND GetGameHwnd() {
+    HWND fg = GetForegroundWindow();
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (pid == GetCurrentProcessId()) return fg;
+
+    HWND found = nullptr;
+    EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+        DWORD p = 0;
+        GetWindowThreadProcessId(hwnd, &p);
+        if (p == GetCurrentProcessId() && IsWindowVisible(hwnd)) {
+            *reinterpret_cast<HWND*>(lParam) = hwnd;
+            return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&found));
+    return found ? found : fg;
+}
+
+std::mutex g_rampMutex;
+WORD g_originalRamp[3][256]{};
+bool g_hasOriginalRamp = false;
+bool g_rampActive = false;
+
 bool ApplyZoomUnsafe(uintptr_t levelRenderer, float zoom) {
     const Offsets& c = g_offsets;
     const auto player = Read<uintptr_t>(levelRenderer + c.levelRendererPlayer);
@@ -257,6 +292,63 @@ float __fastcall GetGammaDetour(void* options, void* unk) {
     const float original = g_originalGetGamma(options, unk);
     const float gamma = g_gamma.load();
     return gamma >= 0 ? gamma : original;
+}
+
+bool InstallGammaHook(const Offsets& candidate) {
+    // 1. Try candidate profile signature if configured
+    if (!candidate.gammaSig.empty() &&
+        InstallHook(candidate.gammaSig, false, reinterpret_cast<void*>(&GetGammaDetour),
+                    reinterpret_cast<void**>(&g_originalGetGamma), "getGamma (profile)")) {
+        return true;
+    }
+
+    // 2. Known fallback signatures across Bedrock versions
+    static const char* kSignatures[] = {
+        // Bedrock 1.26.5x (option 0x32 / 50)
+        "48 83 EC 38 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 48 8B 01 48 8B 40 08 48 8D 54 24 ? 41 B8 32 00 00 00",
+        // Wildcarded option 0x32
+        "48 83 EC ? ? ? ? ? ? ? ? ? ? ? 48 89 44 24 ? 48 8B 01 48 8B 40 ? 48 8D 54 24 ? 41 B8 32 00 00 00",
+        // Horion / 1.20 - 1.26 (option 0x10D / 269)
+        "48 83 EC ? 80 B9 ? ? ? ? ? 48 8D 54 24 ? 48 8B 01 74 ? 41 B8 0D 01 00 00",
+        // Wildcarded option 0x10D
+        "48 83 EC ? ? ? ? ? ? ? ? ? 48 8D 54 24 ? 48 8B 01 ? ? 41 B8 0D 01 00 00",
+        // Common variant
+        "48 83 EC ? ? ? ? ? ? ? ? ? 48 8D 54 24 ? 48 8B 01 48 8B 40 ? 48 8D 54 24 ? 41 B8 0D 01 00 00"
+    };
+
+    for (const char* sig : kSignatures) {
+        if (InstallHook(sig, false, reinterpret_cast<void*>(&GetGammaDetour),
+                        reinterpret_cast<void**>(&g_originalGetGamma), "getGamma (fallback sig)")) {
+            return true;
+        }
+    }
+
+    // 3. Dynamic instruction search: find option opcode and scan back for function prologue
+    static const char* kOpcodes[] = {
+        "41 B8 0D 01 00 00",
+        "41 B8 32 00 00 00"
+    };
+    for (const char* op : kOpcodes) {
+        auto match = FindPattern(op);
+        if (match) {
+            uintptr_t addr = *match;
+            auto* p = reinterpret_cast<const uint8_t*>(addr);
+            for (int back = 1; back < 128; ++back) {
+                if (p[-back] == 0x48 && p[-back + 1] == 0x83 && p[-back + 2] == 0xEC) {
+                    uintptr_t fn = addr - back;
+                    if (MH_CreateHook(reinterpret_cast<void*>(fn), reinterpret_cast<void*>(&GetGammaDetour),
+                                      reinterpret_cast<void**>(&g_originalGetGamma)) == MH_OK &&
+                        MH_EnableHook(reinterpret_cast<void*>(fn)) == MH_OK) {
+                        Log("getGamma: hooked via dynamic opcode search");
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    Log("getGamma: memory hook not available for this version; display gamma ramp will be used as fallback");
+    return false;
 }
 
 // ---------------------------------------------------------------- chat
@@ -424,13 +516,16 @@ bool Init(std::string& error) {
         g_zoomHooked = InstallHook(candidate.renderLevelSig, candidate.renderLevelSigIsCall,
                                    reinterpret_cast<void*>(&RenderLevelDetour),
                                    reinterpret_cast<void**>(&g_originalRenderLevel), "renderLevel");
-        g_gammaHooked = InstallHook(candidate.gammaSig, false, reinterpret_cast<void*>(&GetGammaDetour),
-                                    reinterpret_cast<void**>(&g_originalGetGamma), "getGamma");
+        g_gammaHooked = InstallGammaHook(candidate);
         return true;
     }
 
     error = "Minecraft " + GameVersion() + " is not supported yet (signature not found).";
     return false;
+}
+
+void Cleanup() {
+    RestoreDisplayGammaRamp();
 }
 
 GameState State() {
@@ -449,12 +544,87 @@ void SetGamma(float gamma) {
     g_gamma = gamma;
 }
 
+void SetDisplayGammaRamp(float gamma) {
+    std::lock_guard lock(g_rampMutex);
+    HWND hwnd = GetGameHwnd();
+    if (!hwnd) return;
+    HDC hdc = GetDC(hwnd);
+    if (!hdc) return;
+
+    if (!g_hasOriginalRamp) {
+        if (GetDeviceGammaRamp(hdc, g_originalRamp)) {
+            g_hasOriginalRamp = true;
+        }
+    }
+
+    if (gamma <= 1.01f) {
+        if (g_rampActive && g_hasOriginalRamp) {
+            SetDeviceGammaRamp(hdc, g_originalRamp);
+            g_rampActive = false;
+        }
+        ReleaseDC(hwnd, hdc);
+        return;
+    }
+
+    WORD ramp[3][256];
+    const double exponent = 1.0 / std::clamp(static_cast<double>(gamma) * 0.35 + 0.65, 1.0, 6.0);
+    for (int i = 0; i < 256; ++i) {
+        double v = i / 255.0;
+        double boosted = std::pow(v, exponent);
+        boosted = boosted * 0.82 + 0.18;
+        WORD val = static_cast<WORD>(std::clamp(boosted * 65535.0, 0.0, 65535.0));
+        ramp[0][i] = val;
+        ramp[1][i] = val;
+        ramp[2][i] = val;
+    }
+    if (SetDeviceGammaRamp(hdc, ramp)) {
+        g_rampActive = true;
+    }
+    ReleaseDC(hwnd, hdc);
+}
+
+void RestoreDisplayGammaRamp() {
+    std::lock_guard lock(g_rampMutex);
+    if (!g_rampActive || !g_hasOriginalRamp) return;
+    HWND hwnd = GetGameHwnd();
+    if (!hwnd) return;
+    HDC hdc = GetDC(hwnd);
+    if (hdc) {
+        SetDeviceGammaRamp(hdc, g_originalRamp);
+        g_rampActive = false;
+        ReleaseDC(hwnd, hdc);
+    }
+}
+
 bool ZoomAvailable() {
     return g_zoomHooked && g_offsets.levelRendererPlayerFovX;
 }
 
 bool GammaAvailable() {
+    return true; // Always available: native in-game memory hook, or hardware display gamma ramp fallback
+}
+
+bool IsGammaHooked() {
     return g_gammaHooked;
+}
+
+std::string CurrentScreen() {
+    std::lock_guard lock(g_screenMutex);
+    if (GetTickCount64() - g_lastScreenTick > 1000) return {};
+    return g_currentScreen;
+}
+
+bool IsContainerOpen() {
+    std::string s = CurrentScreen();
+    if (s.empty()) return false;
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s.find("inventory") != std::string::npos ||
+           s.find("chest") != std::string::npos ||
+           s.find("barrel") != std::string::npos ||
+           s.find("shulker") != std::string::npos ||
+           s.find("hopper") != std::string::npos ||
+           s.find("dispenser") != std::string::npos ||
+           s.find("dropper") != std::string::npos;
 }
 
 bool ChatAvailable() {

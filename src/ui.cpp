@@ -3,6 +3,7 @@
 #include "config.h"
 #include "game.h"
 #include "modules.h"
+#include "schematic.h"
 #include "waypoints.h"
 
 #include <windows.h>
@@ -20,7 +21,7 @@
 
 namespace {
 
-enum class Page { Hud, Visual, Utility, Waypoints, Settings };
+enum class Page { Hud, Visual, Utility, Waypoints, Schematics, Settings };
 
 bool s_menuOpen = false;
 bool s_hudEdit = false;
@@ -916,6 +917,7 @@ void DrawMenu(const GameState& state, ImVec2 screen) {
                                     {"Visual", Page::Visual},
                                     {"Utility", Page::Utility},
                                     {"Waypoints", Page::Waypoints},
+                                    {"Schematics", Page::Schematics},
                                     {"Settings", Page::Settings}};
     for (const auto& e : entries) {
         if (SidebarButton(e.label, s_page == e.page)) {
@@ -941,6 +943,7 @@ void DrawMenu(const GameState& state, ImVec2 screen) {
         case Page::Visual: DrawModulePage(Category::Visual); break;
         case Page::Utility: DrawModulePage(Category::Utility); break;
         case Page::Waypoints: DrawWaypointsPage(state); break;
+        case Page::Schematics: schematic::DrawPage(state); break;
         case Page::Settings: DrawSettingsPage(state); break;
         }
     }

@@ -3,6 +3,7 @@
 #include "config.h"
 #include "input.h"
 #include "render.h"
+#include "schematic.h"
 #include "ui.h"
 #include "waypoints.h"
 
@@ -16,6 +17,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <thread>
 
 Theme g_theme;
 
@@ -394,17 +396,64 @@ private:
 
 class Fullbright : public Module {
 public:
-    Fullbright() : Module("Fullbright", "See everything, even in caves.", Category::Visual) {
-        AddFloat("gamma", "Brightness", gamma, 1, 25, "%.0f");
+    Fullbright() : Module("Fullbright", "See clearly anywhere, even in pitch black caves.", Category::Visual) {
+        AddFloat("gamma", "Brightness", gamma, 1.0f, 25.0f, "%.0f");
+        AddBool("forceRamp", "Use display gamma ramp", forceRamp);
     }
     bool Available() const override { return game::GammaAvailable(); }
-    void OnFrame(const GameState&) override { game::SetGamma(gamma); }
+
+    void OnFrame(const GameState&) override {
+        if (!forceRamp && game::IsGammaHooked()) {
+            game::SetGamma(gamma);
+            game::RestoreDisplayGammaRamp();
+        } else {
+            game::SetGamma(-1.0f);
+            game::SetDisplayGammaRamp(gamma);
+        }
+    }
+
     void OnToggle(bool on) override {
-        if (!on) game::SetGamma(-1);
+        if (!on) {
+            game::SetGamma(-1.0f);
+            game::RestoreDisplayGammaRamp();
+        }
     }
 
 private:
-    float gamma = 12;
+    float gamma = 12.0f;
+    bool forceRamp = false;
+};
+
+class SchematicModule : public Module {
+public:
+    SchematicModule() : Module("Schematics", "3D blueprint ghost blocks & building guides in the world.", Category::Visual, true) {
+        hudPos = {0.80f, 0.01f};
+        AddBool("showHud", "Show info HUD", showHud);
+    }
+
+    void OnWorld(ImDrawList* dl, const GameState& s, ImVec2 screen) override {
+        schematic::Draw3D(dl, s, screen);
+    }
+
+    ImVec2 DrawHud(ImDrawList* dl, ImVec2 pos, const GameState&) override {
+        if (!showHud) return {};
+        const auto& cur = schematic::Current();
+        if (cur.blocks.empty()) return {};
+
+        std::vector<std::pair<std::string, std::string>> rows;
+        rows.emplace_back("Blueprint", cur.name);
+        if (cur.allLayers) {
+            rows.emplace_back("Layers", "All (" + std::to_string(cur.sizeY) + ")");
+        } else {
+            rows.emplace_back("Layer", std::to_string(cur.minLayer) + " / " + std::to_string(std::max(0, cur.sizeY - 1)));
+        }
+        rows.emplace_back("Blocks", std::to_string(cur.blocks.size()));
+
+        return RowsPanel(dl, pos, rows, hudScale);
+    }
+
+private:
+    bool showHud = true;
 };
 
 class Zoom : public Module {
@@ -535,6 +584,209 @@ private:
     bool wasDown = false;
 };
 
+class InventorySorter : public Module {
+public:
+    InventorySorter()
+        : Module("Inventory Sorter", "Auto sort inventories, loot chests, and quick actions toolbar.", Category::Utility) {
+        AddKey("sortKey", "Sort inventory key", sortKey);
+        AddKey("stealKey", "Steal container key", stealKey);
+        AddBool("autoSteal", "Auto loot chests on open", autoSteal);
+        AddInt("stealDelay", "Action delay (ms)", actionDelay, 10, 100);
+        AddBool("showToolbar", "Show on-screen toolbar", showToolbar);
+    }
+
+    void OnFrame(const GameState&) override {
+        const bool inContainer = game::IsContainerOpen();
+        const std::string curScreen = game::CurrentScreen();
+
+        // Check if a new chest/container screen was just opened
+        if (inContainer && curScreen != lastScreen) {
+            lastScreen = curScreen;
+            if (autoSteal && curScreen.find("inventory") == std::string::npos) {
+                stealPending = true;
+                stealStartTick = GetTickCount64() + 150; // brief delay for container animation
+            }
+        } else if (!inContainer) {
+            lastScreen.clear();
+            stealPending = false;
+        }
+
+        if (stealPending && GetTickCount64() >= stealStartTick) {
+            stealPending = false;
+            TriggerStealAll();
+        }
+
+        // Hotkey triggers
+        if (inContainer && GameFocused() && !s_menuOpen) {
+            if (KeyPressed(sortKey, sortWasDown)) {
+                TriggerSort();
+            }
+            if (KeyPressed(stealKey, stealWasDown)) {
+                TriggerStealAll();
+            }
+        }
+    }
+
+    void OnWorld(ImDrawList* dl, const GameState&, ImVec2 screen) override {
+        if (!showToolbar || !game::IsContainerOpen() || s_menuOpen) return;
+        DrawOverlayToolbar(dl, screen);
+    }
+
+    void TriggerSort() {
+        ui::Notify("Inventory Sorter", "Organizing inventory slots");
+        HWND hwnd = GameWindow();
+        if (!hwnd) hwnd = GetForegroundWindow();
+        if (!hwnd) return;
+        SimulateSort(hwnd);
+    }
+
+    void TriggerStealAll() {
+        ui::Notify("Chest Stealer", "Looting container items");
+        HWND hwnd = GameWindow();
+        if (!hwnd) hwnd = GetForegroundWindow();
+        if (!hwnd) return;
+        SimulateSteal(hwnd, actionDelay);
+    }
+
+    void TriggerDepositAll() {
+        ui::Notify("Inventory", "Depositing inventory items");
+        HWND hwnd = GameWindow();
+        if (!hwnd) hwnd = GetForegroundWindow();
+        if (!hwnd) return;
+        SimulateDeposit(hwnd, actionDelay);
+    }
+
+private:
+    void DrawOverlayToolbar(ImDrawList* dl, ImVec2 screen) {
+        const float barW = 400.0f, barH = 36.0f;
+        const float x = (screen.x - barW) * 0.5f;
+        const float y = 16.0f;
+
+        HudPanel(dl, {x, y}, {x + barW, y + barH}, 1.0f);
+
+        ImGui::SetNextWindowPos(ImVec2(x + 10.0f, y + 4.0f));
+        ImGui::Begin("##inv_toolbar", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
+                                               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.22f, 0.32f, 0.9f));
+
+        if (ImGui::SmallButton("Sort (R)")) TriggerSort();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Steal All (X)")) TriggerStealAll();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Deposit All")) TriggerDepositAll();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Merge")) TriggerSort();
+
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        ImGui::End();
+    }
+
+    static void SimulateSteal(HWND hwnd, int delayMs) {
+        std::thread([hwnd, delayMs]() {
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            const int width = rect.right - rect.left;
+            const int height = rect.bottom - rect.top;
+
+            const float centerX = width * 0.5f;
+            const float startY = height * 0.32f;
+            const float slotSize = (width > 1600 ? 36.0f : 28.0f);
+            const float startX = centerX - (4.0f * slotSize);
+
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 9; ++col) {
+                    const int sx = static_cast<int>(startX + col * slotSize);
+                    const int sy = static_cast<int>(startY + row * slotSize);
+                    const LPARAM lparam = MAKELPARAM(sx, sy);
+
+                    PostMessageW(hwnd, WM_KEYDOWN, VK_SHIFT, 0);
+                    PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON | MK_SHIFT, lparam);
+                    Sleep(4);
+                    PostMessageW(hwnd, WM_LBUTTONUP, MK_SHIFT, lparam);
+                    PostMessageW(hwnd, WM_KEYUP, VK_SHIFT, 0);
+
+                    if (delayMs > 0) Sleep(delayMs);
+                }
+            }
+        }).detach();
+    }
+
+    static void SimulateDeposit(HWND hwnd, int delayMs) {
+        std::thread([hwnd, delayMs]() {
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            const int width = rect.right - rect.left;
+            const int height = rect.bottom - rect.top;
+
+            const float centerX = width * 0.5f;
+            const float startY = height * 0.58f;
+            const float slotSize = (width > 1600 ? 36.0f : 28.0f);
+            const float startX = centerX - (4.0f * slotSize);
+
+            for (int row = 0; row < 3; ++row) {
+                for (int col = 0; col < 9; ++col) {
+                    const int sx = static_cast<int>(startX + col * slotSize);
+                    const int sy = static_cast<int>(startY + row * slotSize);
+                    const LPARAM lparam = MAKELPARAM(sx, sy);
+
+                    PostMessageW(hwnd, WM_KEYDOWN, VK_SHIFT, 0);
+                    PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON | MK_SHIFT, lparam);
+                    Sleep(4);
+                    PostMessageW(hwnd, WM_LBUTTONUP, MK_SHIFT, lparam);
+                    PostMessageW(hwnd, WM_KEYUP, VK_SHIFT, 0);
+
+                    if (delayMs > 0) Sleep(delayMs);
+                }
+            }
+        }).detach();
+    }
+
+    static void SimulateSort(HWND hwnd) {
+        std::thread([hwnd]() {
+            RECT rect;
+            GetClientRect(hwnd, &rect);
+            const int width = rect.right - rect.left;
+            const int height = rect.bottom - rect.top;
+
+            const float centerX = width * 0.5f;
+            const float startY = height * 0.58f;
+            const float slotSize = (width > 1600 ? 36.0f : 28.0f);
+            const float startX = centerX - (4.0f * slotSize);
+
+            for (int col = 0; col < 9; ++col) {
+                for (int row = 0; row < 3; ++row) {
+                    const int sx = static_cast<int>(startX + col * slotSize);
+                    const int sy = static_cast<int>(startY + row * slotSize);
+                    const LPARAM lparam = MAKELPARAM(sx, sy);
+
+                    PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam);
+                    Sleep(4);
+                    PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam);
+                    Sleep(8);
+                    PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, lparam);
+                    Sleep(4);
+                    PostMessageW(hwnd, WM_LBUTTONUP, 0, lparam);
+                    Sleep(12);
+                }
+            }
+        }).detach();
+    }
+
+    int sortKey = 'R';
+    int stealKey = 'X';
+    bool autoSteal = false;
+    int actionDelay = 25;
+    bool showToolbar = true;
+
+    bool sortWasDown = false;
+    bool stealWasDown = false;
+    std::string lastScreen;
+    bool stealPending = false;
+    ULONGLONG stealStartTick = 0;
+};
+
 std::vector<std::unique_ptr<Module>> s_owned;
 std::vector<Module*> s_modules;
 std::string s_activeProfile = "Default";
@@ -620,6 +872,8 @@ void HudText(ImDrawList* dl, ImVec2 pos, ImU32 color, const char* text, float sc
 namespace modules {
 
 void Init() {
+    schematic::Init();
+
     s_owned.push_back(std::make_unique<Coordinates>());
     s_owned.push_back(std::make_unique<Compass>());
     s_owned.push_back(std::make_unique<Fps>());
@@ -628,14 +882,16 @@ void Init() {
     s_owned.push_back(std::make_unique<Keystrokes>());
     s_owned.push_back(std::make_unique<ChunkBorders>());
     s_owned.push_back(std::make_unique<Fullbright>());
+    s_owned.push_back(std::make_unique<SchematicModule>());
     s_owned.push_back(std::make_unique<Zoom>());
     s_owned.push_back(std::make_unique<ToggleSprintSneak>());
     s_owned.push_back(std::make_unique<ChatCoordinates>());
+    s_owned.push_back(std::make_unique<InventorySorter>());
     s_owned.push_back(std::make_unique<Screenshot>());
     for (auto& m : s_owned) s_modules.push_back(m.get());
 
     // Sensible first-run defaults.
-    for (const char* on : {"Coordinates", "Compass", "FPS", "Zoom", "Chat Coordinates", "Screenshot"})
+    for (const char* on : {"Coordinates", "Compass", "FPS", "Zoom", "Chat Coordinates", "Screenshot", "Inventory Sorter"})
         for (Module* m : s_modules)
             if (m->name == on) m->enabled = true;
 

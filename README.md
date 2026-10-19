@@ -26,11 +26,17 @@ schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaar
 | Clock | Tijd en sessie-timer |
 | Keystrokes | W A S D, muisknoppen (met CPS) en spatie |
 | Chunk Borders | Randen van de chunk waar je in staat |
-| Fullbright | Alles helder |
+| Fullbright | Alles helder (dual-mode: in-game engine hook + hardware display ramp fallback) |
+| Schematics | 3D ghost blocks / blauwdrukken in de wereld (Litematica-stijl layer control, templates & generator) |
 | Zoom | Houd **C** ingedrukt om in te zoomen |
 | Toggle Sprint | Sprint/sneak één keer indrukken om aan te houden (experimenteel) |
+| Inventory Sorter | Automatisch kisten looten, sorteren (**R**), dumpen, stack merge & on-screen toolbar |
 | Chat Coordinates | Ziet coördinaten in chat en laat je er een waypoint van maken |
 | Screenshot | **F6** kopieert het scherm naar je klembord |
+
+**Schematics**: kies uit ingebouwde blauwdrukken (Nether Portal, Enchanting room, Beacon pyramide, Huisje, Mob farm, Cirkel-/Bol-generator) of laad eigen `.blueprint` bestanden uit `%LOCALAPPDATA%\BedrockWaypoints\schematics\`. Inclusief laag-voor-laag weergave, rotatie, nudging en materialenlijst.
+
+**Inventory Sorter**: toont een handige knoppenbalk boven open kisten/inventaris met knoppen voor *Sort*, *Steal All*, *Deposit All* en *Merge*. Met instelbare sneltoetsen (**R** en **X**) en optionele automatische chest stealer bij openen.
 
 **Settings**: accentkleur, HUD-achtergrond, notificaties, **Edit HUD layout** (HUD-elementen verslepen, scrollen
 om groter/kleiner te maken) en **profielen** (instellingen opslaan en wisselen).
@@ -38,7 +44,7 @@ om groter/kleiner te maken) en **profielen** (instellingen opslaan en wisselen).
 **Waypoints**: lijst (met **Edit** en **Copy** om in chat te plakken), **Add** en **Options**. **F7** zet een waypoint
 waar je staat. Death waypoints, per wereld/dimensie, **Always load** en Nether-omrekening werken zoals voorheen.
 
-Alles wordt opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\` (`waypoints.txt`, `settings.ini`, `profiles\`).
+Alles wordt opgeslagen in `%LOCALAPPDATA%\BedrockWaypoints\` (`waypoints.txt`, `settings.ini`, `schematics\`, `profiles\`).
 
 ## Na een Minecraft update
 

@@ -39,6 +39,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(module);
         if (HANDLE thread = CreateThread(nullptr, 0, InitThread, nullptr, 0, nullptr)) CloseHandle(thread);
+    } else if (reason == DLL_PROCESS_DETACH) {
+        game::Cleanup();
     }
     return TRUE;
 }
