@@ -20,6 +20,8 @@ struct GameState {
     Vec3 playerPos;       // eye position, feet are kEyeHeight lower
     char dimension[32]{}; // "Overworld", "Nether", "TheEnd" or empty when unknown
     char world[128]{};    // world name or empty when unknown
+    char heldItem[64]{};  // item id in the selected hotbar slot ("wind_charge"), empty for a free hand
+    bool mouseGrabbed = true; // false while a game screen (inventory, chat, pause) has the mouse
 };
 
 struct DeathInfo {
@@ -51,9 +53,13 @@ void SetCursorFree(bool free);
 bool ZoomAvailable();
 bool GammaAvailable();
 bool ChatAvailable();
+bool HeldItemAvailable();
 
 // Coordinates someone typed in chat, oldest first.
 bool PollChatCoords(ChatCoords& out);
+
+// Direction the camera looks at (unit vector).
+Vec3 Forward(const GameState& state);
 
 // Horizontal facing in degrees: 0 = north, 90 = east, 180 = south, 270 = west.
 float Heading(const GameState& state);

@@ -34,6 +34,14 @@ struct Offsets {
     uintptr_t actorDimension = 0;               // Actor -> std::shared_ptr<Dimension>
     uintptr_t dimensionName = 0;                // Dimension -> std::string ("Overworld", "Nether", "TheEnd")
 
+    // Held item
+    uintptr_t playerSupplies = 0;              // Player -> PlayerInventory*
+    uintptr_t playerInventorySelectedSlot = 0; // PlayerInventory -> int hotbar slot
+    uintptr_t playerInventoryInventory = 0;    // PlayerInventory -> Inventory*
+    uintptr_t inventoryGetItem = 0;            // Inventory::getItem(int) vtable index
+    uintptr_t itemStackItem = 0;               // ItemStack -> WeakPtr<Item> (Item** at +0)
+    uintptr_t itemId = 0;                      // Item -> std::string inside its HashedString id ("wind_charge")
+
     // World name
     uintptr_t clientInstanceMinecraft = 0; // ClientInstance -> Minecraft*
     uintptr_t minecraftGameSession = 0;    // Minecraft -> GameSession*

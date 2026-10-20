@@ -21,6 +21,9 @@ int Cps(bool right);
 bool SprintToggled();
 bool SneakToggled();
 
+// Sends a key press or release to the game window, as if the key was pressed.
+void SendKey(HWND hwnd, int vk, bool down);
+
 // Lets go of a toggled key (used when the feature is switched off).
 void ReleaseToggles(HWND hwnd);
 

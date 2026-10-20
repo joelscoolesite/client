@@ -24,9 +24,13 @@ void AddClick(int button) {
     if (s_clicks[button].size() > 100) s_clicks[button].pop_front();
 }
 
-LPARAM KeyUpParam(WPARAM key) {
+LPARAM KeyParam(WPARAM key, bool down) {
     const UINT scan = MapVirtualKeyW(static_cast<UINT>(key), MAPVK_VK_TO_VSC);
-    return static_cast<LPARAM>(1 | (scan << 16) | (1u << 30) | (1u << 31));
+    return static_cast<LPARAM>(1 | (scan << 16) | (down ? 0 : (1u << 30) | (1u << 31)));
+}
+
+LPARAM KeyUpParam(WPARAM key) {
+    return KeyParam(key, false);
 }
 
 // Pressing the key flips the toggle. While toggled, the key-up is hidden so the game thinks it is still held.
@@ -68,6 +72,10 @@ bool SprintToggled() {
 
 bool SneakToggled() {
     return s_sneakHeld;
+}
+
+void SendKey(HWND hwnd, int vk, bool down) {
+    PostMessageW(hwnd, down ? WM_KEYDOWN : WM_KEYUP, vk, KeyParam(vk, down));
 }
 
 void ReleaseToggles(HWND hwnd) {

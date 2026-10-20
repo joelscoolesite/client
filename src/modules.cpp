@@ -12,6 +12,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <map>
@@ -535,6 +536,45 @@ private:
     bool wasDown = false;
 };
 
+// A wind charge thrown at your feet launches you much higher when you jump in the same tick:
+// you leave the ground before it hits, so the jump and the blast add up.
+class WindChargeJump : public Module {
+public:
+    WindChargeJump()
+        : Module("Wind Charge Jump", "Hold a wind charge, look down and right-click: jumps for you for the highest launch.",
+                 Category::Utility) {
+        AddKey("jumpKey", "Jump key", jumpKey);
+        AddFloat("pitch", "Look down at least", minPitch, 30, 90, "%.0f deg");
+        AddInt("delay", "Jump delay (ms)", delay, 0, 200);
+    }
+    bool Available() const override { return game::HeldItemAvailable(); }
+
+    void OnFrame(const GameState& s) override {
+        const ULONGLONG now = GetTickCount64();
+        if (KeyPressed(VK_RBUTTON, rightWasDown) && !s_menuOpen && s.valid && s.mouseGrabbed &&
+            std::strstr(s.heldItem, "wind_charge") && game::Forward(s).y <= -std::sin(minPitch * 0.0174533f))
+            jumpAt = now + delay;
+
+        if (jumpAt && now >= jumpAt) {
+            jumpAt = 0;
+            input::SendKey(GameWindow(), jumpKey, true);
+            releaseAt = now + 100; // two game ticks, so the game sees the key held
+        }
+        if (releaseAt && now >= releaseAt) {
+            releaseAt = 0;
+            input::SendKey(GameWindow(), jumpKey, false);
+        }
+    }
+
+private:
+    int jumpKey = VK_SPACE;
+    float minPitch = 60;
+    int delay = 0;
+    bool rightWasDown = false;
+    ULONGLONG jumpAt = 0;
+    ULONGLONG releaseAt = 0;
+};
+
 std::vector<std::unique_ptr<Module>> s_owned;
 std::vector<Module*> s_modules;
 std::string s_activeProfile = "Default";
@@ -632,6 +672,7 @@ void Init() {
     s_owned.push_back(std::make_unique<ToggleSprintSneak>());
     s_owned.push_back(std::make_unique<ChatCoordinates>());
     s_owned.push_back(std::make_unique<Screenshot>());
+    s_owned.push_back(std::make_unique<WindChargeJump>());
     for (auto& m : s_owned) s_modules.push_back(m.get());
 
     // Sensible first-run defaults.

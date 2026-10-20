@@ -131,6 +131,26 @@ bool ReadPlayerUnsafe(uintptr_t clientInstance, GameState& out) {
     return Finite(out.playerPos);
 }
 
+bool ReadHeldItemUnsafe(uintptr_t clientInstance, GameState& out) {
+    const Offsets& c = g_offsets;
+    if (!c.clientInstanceGetLocalPlayer || !c.playerSupplies || !c.inventoryGetItem) return false;
+    const uintptr_t player = CallVirtual(clientInstance, c.clientInstanceGetLocalPlayer);
+    if (!player) return false;
+    const auto supplies = Read<uintptr_t>(player + c.playerSupplies);
+    if (!supplies) return false;
+    const int slot = Read<int>(supplies + c.playerInventorySelectedSlot);
+    const auto inventory = Read<uintptr_t>(supplies + c.playerInventoryInventory);
+    if (!inventory || slot < 0 || slot > 8) return false;
+    using GetItemFn = uintptr_t(__fastcall*)(uintptr_t, int);
+    const auto getItem = reinterpret_cast<GetItemFn>(Read<uintptr_t*>(inventory)[c.inventoryGetItem]);
+    const uintptr_t stack = getItem(inventory, slot);
+    if (!stack) return false;
+    const auto itemRef = Read<uintptr_t>(stack + c.itemStackItem);
+    const auto item = itemRef ? Read<uintptr_t>(itemRef) : 0;
+    if (item) ReadString(item + c.itemId, out.heldItem, sizeof(out.heldItem)); // no item = free hand
+    return true;
+}
+
 bool ReadWorldUnsafe(uintptr_t clientInstance, GameState& out) {
     const Offsets& c = g_offsets;
     if (!c.clientInstanceMinecraft) return false;
@@ -180,6 +200,9 @@ bool ReadCamera(uintptr_t clientInstance, GameState& out) {
 }
 bool ReadPlayer(uintptr_t clientInstance, GameState& out) {
     GUARDED(ReadPlayerUnsafe(clientInstance, out))
+}
+bool ReadHeldItem(uintptr_t clientInstance, GameState& out) {
+    GUARDED(ReadHeldItemUnsafe(clientInstance, out))
 }
 bool ReadWorld(uintptr_t clientInstance, GameState& out) {
     GUARDED(ReadWorldUnsafe(clientInstance, out))
@@ -446,6 +469,9 @@ void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     state.valid = ReadCamera(clientInstance, state);
     if (!state.valid) return;
     state.hasPlayer = ReadPlayer(clientInstance, state);
+    if (state.hasPlayer) ReadHeldItem(clientInstance, state);
+    bool grabbed = true;
+    if (ReadCursorGrabbed(clientInstance, grabbed)) state.mouseGrabbed = grabbed;
     ReadWorld(clientInstance, state);
     CheckChat(clientInstance);
 
@@ -562,6 +588,10 @@ bool ZoomAvailable() {
 
 bool GammaAvailable() {
     return g_gammaHooked;
+}
+
+bool HeldItemAvailable() {
+    return g_offsets.playerSupplies != 0;
 }
 
 bool ChatAvailable() {

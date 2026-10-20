@@ -31,6 +31,7 @@ schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaar
 | Toggle Sprint | Sprint/sneak één keer indrukken om aan te houden (experimenteel) |
 | Chat Coordinates | Ziet coördinaten in chat en laat je er een waypoint van maken |
 | Screenshot | **F6** kopieert het scherm naar je klembord |
+| Wind Charge Jump | Windcharge in je hand, naar beneden kijken en rechtsklikken: springt voor je in dezelfde tick, zodat je zo hoog mogelijk gaat (springtoets, kijkhoek en vertraging instelbaar) |
 
 **Settings**: accentkleur, HUD-achtergrond, notificaties, **Edit HUD layout** (HUD-elementen verslepen, scrollen
 om groter/kleiner te maken) en **profielen** (instellingen opslaan en wisselen).

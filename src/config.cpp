@@ -32,6 +32,12 @@ constexpr NumericField kNumericFields[] = {
     {"actorStateVector", &Offsets::actorStateVector},
     {"actorDimension", &Offsets::actorDimension},
     {"dimensionName", &Offsets::dimensionName},
+    {"playerSupplies", &Offsets::playerSupplies},
+    {"playerInventorySelectedSlot", &Offsets::playerInventorySelectedSlot},
+    {"playerInventoryInventory", &Offsets::playerInventoryInventory},
+    {"inventoryGetItem", &Offsets::inventoryGetItem},
+    {"itemStackItem", &Offsets::itemStackItem},
+    {"itemId", &Offsets::itemId},
     {"clientInstanceMinecraft", &Offsets::clientInstanceMinecraft},
     {"minecraftGameSession", &Offsets::minecraftGameSession},
     {"gameSessionHasLevel", &Offsets::gameSessionHasLevel},
@@ -120,7 +126,7 @@ void WriteDefaultConfig(const std::filesystem::path& path) {
       << ";sigIsCall=" << (d.sigIsCall ? 1 : 0) << "\n"
       << ";renderLevelSigIsCall=" << (d.renderLevelSigIsCall ? 1 : 0) << "\n";
     for (const auto& field : kStringFields) f << ";" << field.key << "=" << d.*field.member << "\n";
-    f << "; Values ending in GetLevelRenderer/GetLocalPlayer are vtable indexes.\n";
+    f << "; Values ending in GetLevelRenderer/GetLocalPlayer/GetItem are vtable indexes.\n";
     for (const auto& field : kNumericFields) f << ";" << field.key << "=" << Hex(d.*field.member) << "\n";
 }
 
@@ -148,6 +154,12 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v2650.actorStateVector = 0x218;
         v2650.actorDimension = 0x1C8;
         v2650.dimensionName = 0x20;
+        v2650.playerSupplies = 0x5B8;
+        v2650.playerInventorySelectedSlot = 0x10;
+        v2650.playerInventoryInventory = 0xB8;
+        v2650.inventoryGetItem = 7;
+        v2650.itemStackItem = 0x8;
+        v2650.itemId = 0xD8; // HashedString: hash at +0xD0, string at +0xD8
         v2650.clientInstanceMinecraft = 0x1B0;
         v2650.minecraftGameSession = 0xC8;
         v2650.gameSessionHasLevel = 0x28;
