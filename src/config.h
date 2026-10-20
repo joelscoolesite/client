@@ -41,6 +41,13 @@ struct Offsets {
     uintptr_t inventoryGetItem = 0;            // Inventory::getItem(int) vtable index
     uintptr_t itemStackItem = 0;               // ItemStack -> WeakPtr<Item> (Item** at +0)
     uintptr_t itemId = 0;                      // Item -> std::string inside its HashedString id ("wind_charge")
+    uintptr_t itemStackCount = 0;              // ItemStackBase -> uint8_t stack size
+    uintptr_t itemGetMaxDamage = 0;            // Item::getMaxDamage vtable index
+    std::string damageValueSig;                // short ItemStackBase::getDamageValue(ItemStackBase*)
+
+    // Armor and offhand live in ActorEquipmentComponent, found through the game's entt registry
+    uintptr_t actorEnttRegistry = 0; // Actor -> entt::basic_registry* (inside EntityContext at +0x8)
+    uintptr_t actorEntityId = 0;     // Actor -> uint32_t EntityId
 
     // World name
     uintptr_t clientInstanceMinecraft = 0; // ClientInstance -> Minecraft*

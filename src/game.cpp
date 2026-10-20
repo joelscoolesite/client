@@ -131,23 +131,105 @@ bool ReadPlayerUnsafe(uintptr_t clientInstance, GameState& out) {
     return Finite(out.playerPos);
 }
 
-bool ReadHeldItemUnsafe(uintptr_t clientInstance, GameState& out) {
+using GetDamageFn = short(__fastcall*)(uintptr_t itemStack);
+GetDamageFn g_getDamageValue = nullptr;
+
+constexpr uint32_t kTotemCountSlots = 36;               // hotbar + inventory
+constexpr uint32_t kActorEquipmentComponent = 0xB06141A9; // entt type hash (from Latite)
+
+uintptr_t GetItemUnsafe(uintptr_t container, int slot) {
+    using GetItemFn = uintptr_t(__fastcall*)(uintptr_t, int);
+    return reinterpret_cast<GetItemFn>(Read<uintptr_t*>(container)[g_offsets.inventoryGetItem])(container, slot);
+}
+
+void ReadItemUnsafe(uintptr_t stack, ItemInfo& out, bool durability) {
+    const Offsets& c = g_offsets;
+    if (!stack) return;
+    const auto itemRef = Read<uintptr_t>(stack + c.itemStackItem);
+    const auto item = itemRef ? Read<uintptr_t>(itemRef) : 0;
+    if (!item) return; // empty slot
+    ReadString(item + c.itemId, out.id, sizeof(out.id));
+    if (c.itemStackCount) out.count = Read<uint8_t>(stack + c.itemStackCount);
+    if (!durability || !c.itemGetMaxDamage || !g_getDamageValue) return;
+    using MaxDamageFn = int(__fastcall*)(uintptr_t);
+    const int max = reinterpret_cast<MaxDamageFn>(Read<uintptr_t*>(item)[c.itemGetMaxDamage])(item);
+    if (max <= 0) return;
+    out.maxDurability = max;
+    out.durability = std::clamp(max - g_getDamageValue(stack), 0, max);
+}
+
+// Raw version of entt::basic_registry::try_get for the entt build the game uses (checked against entt
+// commit fe8d7d7, the one Latite uses, with the MSVC layout):
+//   registry: context vars (a dense_map, 56 bytes), then pools: dense_map<id, shared_ptr<storage>>
+//   dense_map: sparse vector<size_t> at +0, packed vector<node> at +24; node = {next, key, shared_ptr} (32 bytes)
+//   storage: vtable, sparse page vector at +8, type_info* at +56 (hash at +4), payload page vector at +80
+//   entity pages hold 2048 entries, component pages 128; the low 18 bits of an id are its index.
+uintptr_t FindComponentUnsafe(uintptr_t registry, uint32_t entity, uint32_t typeHash, size_t componentSize) {
+    const uintptr_t pools = registry + 56;
+    const auto bucketsBegin = Read<uintptr_t>(pools), bucketsEnd = Read<uintptr_t>(pools + 8);
+    const auto nodes = Read<uintptr_t>(pools + 24);
+    const size_t buckets = (bucketsEnd - bucketsBegin) / 8;
+    if (!buckets || (buckets & (buckets - 1)) || !nodes) return 0;
+    uintptr_t storage = 0;
+    size_t index = Read<size_t>(bucketsBegin + (typeHash & (buckets - 1)) * 8);
+    for (int guard = 0; index != SIZE_MAX && guard < 1024; ++guard) {
+        const uintptr_t node = nodes + index * 32;
+        if (Read<uint32_t>(node + 8) == typeHash) {
+            storage = Read<uintptr_t>(node + 16);
+            break;
+        }
+        index = Read<size_t>(node);
+    }
+    if (!storage) return 0;
+    const auto descriptor = Read<uintptr_t>(storage + 56);
+    if (!descriptor || Read<uint32_t>(descriptor + 4) != typeHash) return 0; // not the storage we expect
+
+    constexpr uint32_t kIndexMask = 0x3FFFF;
+    const uint32_t slot = entity & kIndexMask;
+    const auto pagesBegin = Read<uintptr_t>(storage + 8), pagesEnd = Read<uintptr_t>(storage + 16);
+    if (slot / 2048 >= (pagesEnd - pagesBegin) / 8) return 0;
+    const auto page = Read<uintptr_t>(pagesBegin + (slot / 2048) * 8);
+    if (!page) return 0;
+    const auto packed = Read<uint32_t>(page + (slot % 2048) * 4);
+    if ((packed & kIndexMask) == kIndexMask || ((packed ^ entity) & ~kIndexMask)) return 0; // missing or old version
+    const uint32_t position = packed & kIndexMask;
+    const auto payload = Read<uintptr_t>(storage + 80);
+    const auto componentPage = payload ? Read<uintptr_t>(payload + (position / 128) * 8) : 0;
+    return componentPage ? componentPage + (position % 128) * componentSize : 0;
+}
+
+bool ReadInventoryUnsafe(uintptr_t clientInstance, GameState& out) {
     const Offsets& c = g_offsets;
     if (!c.clientInstanceGetLocalPlayer || !c.playerSupplies || !c.inventoryGetItem) return false;
     const uintptr_t player = CallVirtual(clientInstance, c.clientInstanceGetLocalPlayer);
     if (!player) return false;
     const auto supplies = Read<uintptr_t>(player + c.playerSupplies);
     if (!supplies) return false;
-    const int slot = Read<int>(supplies + c.playerInventorySelectedSlot);
+    const int selected = Read<int>(supplies + c.playerInventorySelectedSlot);
     const auto inventory = Read<uintptr_t>(supplies + c.playerInventoryInventory);
-    if (!inventory || slot < 0 || slot > 8) return false;
-    using GetItemFn = uintptr_t(__fastcall*)(uintptr_t, int);
-    const auto getItem = reinterpret_cast<GetItemFn>(Read<uintptr_t*>(inventory)[c.inventoryGetItem]);
-    const uintptr_t stack = getItem(inventory, slot);
-    if (!stack) return false;
-    const auto itemRef = Read<uintptr_t>(stack + c.itemStackItem);
-    const auto item = itemRef ? Read<uintptr_t>(itemRef) : 0;
-    if (item) ReadString(item + c.itemId, out.heldItem, sizeof(out.heldItem)); // no item = free hand
+    if (!inventory || selected < 0 || selected > 8) return false;
+
+    for (uint32_t i = 0; i < kTotemCountSlots; ++i) {
+        ItemInfo item;
+        ReadItemUnsafe(GetItemUnsafe(inventory, static_cast<int>(i)), item, false);
+        if (std::strcmp(item.id, "totem_of_undying") == 0) out.totems += item.count;
+    }
+    ReadItemUnsafe(GetItemUnsafe(inventory, selected), out.mainhand, true);
+    out.hasInventory = true;
+
+    if (!c.actorEnttRegistry) return true;
+    const auto registry = Read<uintptr_t>(player + c.actorEnttRegistry);
+    const auto entity = Read<uint32_t>(player + c.actorEntityId);
+    // ActorEquipmentComponent { Inventory* hand (slot 1 = offhand); Inventory* armor; }
+    const uintptr_t equipment = registry ? FindComponentUnsafe(registry, entity, kActorEquipmentComponent, 16) : 0;
+    if (!equipment) return true;
+    const auto hand = Read<uintptr_t>(equipment);
+    const auto armor = Read<uintptr_t>(equipment + 8);
+    if (hand) ReadItemUnsafe(GetItemUnsafe(hand, 1), out.offhand, true);
+    if (armor)
+        for (int i = 0; i < 4; ++i) ReadItemUnsafe(GetItemUnsafe(armor, i), out.armor[i], true);
+    if (std::strcmp(out.offhand.id, "totem_of_undying") == 0) out.totems += out.offhand.count;
+    out.hasEquipment = hand && armor;
     return true;
 }
 
@@ -201,8 +283,8 @@ bool ReadCamera(uintptr_t clientInstance, GameState& out) {
 bool ReadPlayer(uintptr_t clientInstance, GameState& out) {
     GUARDED(ReadPlayerUnsafe(clientInstance, out))
 }
-bool ReadHeldItem(uintptr_t clientInstance, GameState& out) {
-    GUARDED(ReadHeldItemUnsafe(clientInstance, out))
+bool ReadInventory(uintptr_t clientInstance, GameState& out) {
+    GUARDED(ReadInventoryUnsafe(clientInstance, out))
 }
 bool ReadWorld(uintptr_t clientInstance, GameState& out) {
     GUARDED(ReadWorldUnsafe(clientInstance, out))
@@ -469,7 +551,7 @@ void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     state.valid = ReadCamera(clientInstance, state);
     if (!state.valid) return;
     state.hasPlayer = ReadPlayer(clientInstance, state);
-    if (state.hasPlayer) ReadHeldItem(clientInstance, state);
+    if (state.hasPlayer && !ReadInventory(clientInstance, state)) state.hasInventory = state.hasEquipment = false;
     bool grabbed = true;
     if (ReadCursorGrabbed(clientInstance, grabbed)) state.mouseGrabbed = grabbed;
     ReadWorld(clientInstance, state);
@@ -552,6 +634,7 @@ bool Init(std::string& error) {
                                     reinterpret_cast<void**>(&g_originalGetGamma), "getGamma");
         g_releaseCursor = FindFunction<CursorFn>(candidate.releaseCursorSig, "releaseCursor");
         g_grabCursor = FindFunction<CursorFn>(candidate.grabCursorSig, "grabCursor");
+        g_getDamageValue = FindFunction<GetDamageFn>(candidate.damageValueSig, "getDamageValue");
         return true;
     }
 
@@ -592,6 +675,10 @@ bool GammaAvailable() {
 
 bool HeldItemAvailable() {
     return g_offsets.playerSupplies != 0;
+}
+
+bool EquipmentAvailable() {
+    return g_offsets.playerSupplies && g_offsets.actorEnttRegistry;
 }
 
 bool ChatAvailable() {

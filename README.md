@@ -22,6 +22,8 @@ schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaar
 | --- | --- |
 | Coordinates | Je positie, Nether/Overworld-coördinaten en kijkrichting |
 | Compass | Kompasbalk bovenin, met je waypoints als stipjes |
+| Totem Counter | Hoeveel totems je bij je hebt, en een knipperende rand als er geen totem in je offhand zit |
+| Armor Status | Je armor (en wat je vasthoudt) met durability, groen/geel/rood |
 | FPS / CPS | Frames per seconde en clicks per seconde |
 | Clock | Tijd en sessie-timer |
 | Keystrokes | W A S D, muisknoppen (met CPS) en spatie |

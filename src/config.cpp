@@ -38,6 +38,10 @@ constexpr NumericField kNumericFields[] = {
     {"inventoryGetItem", &Offsets::inventoryGetItem},
     {"itemStackItem", &Offsets::itemStackItem},
     {"itemId", &Offsets::itemId},
+    {"itemStackCount", &Offsets::itemStackCount},
+    {"itemGetMaxDamage", &Offsets::itemGetMaxDamage},
+    {"actorEnttRegistry", &Offsets::actorEnttRegistry},
+    {"actorEntityId", &Offsets::actorEntityId},
     {"clientInstanceMinecraft", &Offsets::clientInstanceMinecraft},
     {"minecraftGameSession", &Offsets::minecraftGameSession},
     {"gameSessionHasLevel", &Offsets::gameSessionHasLevel},
@@ -68,6 +72,7 @@ constexpr StringField kStringFields[] = {
     {"gammaSig", &Offsets::gammaSig},
     {"releaseCursorSig", &Offsets::releaseCursorSig},
     {"grabCursorSig", &Offsets::grabCursorSig},
+    {"damageValueSig", &Offsets::damageValueSig},
 };
 
 std::string Trim(const std::string& s) {
@@ -126,7 +131,7 @@ void WriteDefaultConfig(const std::filesystem::path& path) {
       << ";sigIsCall=" << (d.sigIsCall ? 1 : 0) << "\n"
       << ";renderLevelSigIsCall=" << (d.renderLevelSigIsCall ? 1 : 0) << "\n";
     for (const auto& field : kStringFields) f << ";" << field.key << "=" << d.*field.member << "\n";
-    f << "; Values ending in GetLevelRenderer/GetLocalPlayer/GetItem are vtable indexes.\n";
+    f << "; Values ending in GetLevelRenderer/GetLocalPlayer/GetItem/GetMaxDamage are vtable indexes.\n";
     for (const auto& field : kNumericFields) f << ";" << field.key << "=" << Hex(d.*field.member) << "\n";
 }
 
@@ -160,6 +165,11 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v2650.inventoryGetItem = 7;
         v2650.itemStackItem = 0x8;
         v2650.itemId = 0xD8; // HashedString: hash at +0xD0, string at +0xD8
+        v2650.itemStackCount = 0x22;
+        v2650.itemGetMaxDamage = 0x24;
+        v2650.damageValueSig = "56 57 48 83 EC ? 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 48 8B 41 ? 48 85 C0 74 ? 48 83 38";
+        v2650.actorEnttRegistry = 0x10;
+        v2650.actorEntityId = 0x18;
         v2650.clientInstanceMinecraft = 0x1B0;
         v2650.minecraftGameSession = 0xC8;
         v2650.gameSessionHasLevel = 0x28;

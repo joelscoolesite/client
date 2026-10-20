@@ -64,21 +64,22 @@ Vec3 PlayerEye(const GameState& s) {
 }
 
 // Label in accent colour followed by a white value, on one line. Returns the line size.
-ImVec2 LabelValue(ImDrawList* dl, ImVec2 pos, const char* label, const char* value, float scale) {
+ImVec2 LabelValue(ImDrawList* dl, ImVec2 pos, const char* label, const char* value, float scale,
+                  ImU32 valueColor = IM_COL32_WHITE) {
     ImFont* bold = ui::BoldFont();
     const ImVec2 labelSize = HudTextSize(label, scale, bold);
     const float gap = 6 * scale;
     if (dl) {
         HudText(dl, pos, AccentColor(), label, scale, bold);
-        HudText(dl, ImVec2(pos.x + labelSize.x + gap, pos.y), IM_COL32_WHITE, value, scale);
+        HudText(dl, ImVec2(pos.x + labelSize.x + gap, pos.y), valueColor, value, scale);
     }
     const ImVec2 valueSize = HudTextSize(value, scale);
     return {labelSize.x + gap + valueSize.x, std::max(labelSize.y, valueSize.y)};
 }
 
-// Panel with one label/value row per entry.
+// Panel with one label/value row per entry, values optionally coloured per row.
 ImVec2 RowsPanel(ImDrawList* dl, ImVec2 pos, const std::vector<std::pair<std::string, std::string>>& rows,
-                 float scale) {
+                 float scale, const std::vector<ImU32>& colors = {}) {
     const float pad = 8 * scale, lineGap = 3 * scale;
     ImVec2 size{0, 0};
     for (const auto& [label, value] : rows) {
@@ -89,11 +90,37 @@ ImVec2 RowsPanel(ImDrawList* dl, ImVec2 pos, const std::vector<std::pair<std::st
     size = {size.x + pad * 2, size.y - lineGap + pad * 2};
     HudPanel(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y), scale);
     float y = pos.y + pad;
-    for (const auto& [label, value] : rows) {
-        const ImVec2 line = LabelValue(dl, ImVec2(pos.x + pad, y), label.c_str(), value.c_str(), scale);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const ImU32 color = i < colors.size() ? colors[i] : IM_COL32_WHITE;
+        const ImVec2 line =
+            LabelValue(dl, ImVec2(pos.x + pad, y), rows[i].first.c_str(), rows[i].second.c_str(), scale, color);
         y += line.y + lineGap;
     }
     return size;
+}
+
+// "diamond_helmet" -> "Diamond Helmet"
+std::string ItemName(const char* id) {
+    std::string name;
+    bool upper = true;
+    for (const char* p = id; *p; ++p) {
+        if (*p == '_') {
+            name += ' ';
+            upper = true;
+        } else {
+            name += upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(*p))) : *p;
+            upper = false;
+        }
+    }
+    return name;
+}
+
+// Green when fresh, yellow at half, red when nearly broken.
+ImU32 DurabilityColor(int left, int max) {
+    const float t = max > 0 ? static_cast<float>(left) / static_cast<float>(max) : 1.0f;
+    if (t > 0.5f) return IM_COL32(120, 230, 130, 255);
+    if (t > 0.2f) return IM_COL32(240, 200, 80, 255);
+    return IM_COL32(255, 95, 85, 255);
 }
 
 // ---------------------------------------------------------------- world drawing
@@ -168,6 +195,103 @@ public:
 private:
     bool nether = true;
     bool facing = true;
+};
+
+class TotemCounter : public Module {
+public:
+    TotemCounter()
+        : Module("Totem Counter", "How many totems you carry, with a warning when your offhand has none.",
+                 Category::Hud, true) {
+        hudPos = {0.005f, 0.45f};
+        AddBool("offhand", "Show offhand", showOffhand);
+        AddBool("warn", "Warn without offhand totem", warn);
+    }
+    bool Available() const override { return game::HeldItemAvailable(); }
+
+    ImVec2 DrawHud(ImDrawList* dl, ImVec2 pos, const GameState& s) override {
+        const bool live = s.valid && s.hasInventory;
+        if (!live && !modules::hudPreview) return {};
+        const int totems = live ? s.totems : 3;
+        const bool equipment = live ? s.hasEquipment : true;
+        const bool inOffhand = live ? std::strcmp(s.offhand.id, "totem_of_undying") == 0 : true;
+
+        std::vector<std::pair<std::string, std::string>> rows{{"Totems", std::to_string(totems)}};
+        std::vector<ImU32> colors{totems > 0 ? IM_COL32_WHITE : IM_COL32(255, 95, 85, 255)};
+        if (showOffhand && equipment) {
+            rows.push_back({"Offhand", inOffhand            ? "Totem"
+                                       : s.offhand.id[0] ? ItemName(s.offhand.id)
+                                                         : "Empty"});
+            colors.push_back(inOffhand ? IM_COL32(120, 230, 130, 255) : IM_COL32(255, 95, 85, 255));
+        }
+        const ImVec2 size = RowsPanel(dl, pos, rows, hudScale, colors);
+        if (warn && equipment && !inOffhand && totems > 0) {
+            // Blink the border: there is a totem in the inventory but not in the offhand.
+            const float blink = 0.5f + 0.5f * std::sin(static_cast<float>(ImGui::GetTime()) * 8);
+            dl->AddRect(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                        IM_COL32(255, 80, 70, static_cast<int>(120 + 135 * blink)), 6 * hudScale, 0, 2 * hudScale);
+        }
+        return size;
+    }
+
+private:
+    bool showOffhand = true;
+    bool warn = true;
+};
+
+class ArmorStatus : public Module {
+public:
+    ArmorStatus() : Module("Armor Status", "Your armor and held item with durability.", Category::Hud, true) {
+        hudPos = {0.005f, 0.55f};
+        AddBool("percent", "Durability in percent", percent);
+        AddBool("mainhand", "Show held item", showMainhand);
+        AddBool("offhand", "Show offhand", showOffhand);
+    }
+    bool Available() const override { return game::EquipmentAvailable(); }
+
+    ImVec2 DrawHud(ImDrawList* dl, ImVec2 pos, const GameState& s) override {
+        const bool live = s.valid && s.hasEquipment;
+        if (!live && !modules::hudPreview) return {};
+
+        std::vector<std::pair<std::string, std::string>> rows;
+        std::vector<ImU32> colors;
+        auto add = [&](const ItemInfo& item) {
+            if (!item.id[0]) return;
+            std::string value;
+            if (item.durability >= 0) {
+                char text[32];
+                if (percent)
+                    snprintf(text, sizeof(text), "%d%%", item.durability * 100 / item.maxDurability);
+                else
+                    snprintf(text, sizeof(text), "%d/%d", item.durability, item.maxDurability);
+                value = text;
+            } else if (item.count > 1) {
+                value = "x" + std::to_string(item.count);
+            }
+            rows.push_back({ItemName(item.id), value});
+            colors.push_back(item.durability >= 0 ? DurabilityColor(item.durability, item.maxDurability)
+                                                  : IM_COL32_WHITE);
+        };
+
+        if (live) {
+            for (const ItemInfo& piece : s.armor) add(piece);
+            if (showMainhand) add(s.mainhand);
+            if (showOffhand) add(s.offhand);
+        } else {
+            const ItemInfo sample[] = {{"diamond_helmet", 1, 330, 363},
+                                       {"diamond_chestplate", 1, 410, 528},
+                                       {"iron_leggings", 1, 90, 225},
+                                       {"diamond_boots", 1, 40, 429},
+                                       {"netherite_sword", 1, 1900, 2031}};
+            for (const ItemInfo& item : sample) add(item);
+        }
+        if (rows.empty()) return {};
+        return RowsPanel(dl, pos, rows, hudScale, colors);
+    }
+
+private:
+    bool percent = true;
+    bool showMainhand = true;
+    bool showOffhand = false;
 };
 
 class Compass : public Module {
@@ -552,7 +676,7 @@ public:
     void OnFrame(const GameState& s) override {
         const ULONGLONG now = GetTickCount64();
         if (KeyPressed(VK_RBUTTON, rightWasDown) && !s_menuOpen && s.valid && s.mouseGrabbed &&
-            std::strstr(s.heldItem, "wind_charge") && game::Forward(s).y <= -std::sin(minPitch * 0.0174533f))
+            std::strstr(s.mainhand.id, "wind_charge") && game::Forward(s).y <= -std::sin(minPitch * 0.0174533f))
             jumpAt = now + delay;
 
         if (jumpAt && now >= jumpAt) {
@@ -662,6 +786,8 @@ namespace modules {
 void Init() {
     s_owned.push_back(std::make_unique<Coordinates>());
     s_owned.push_back(std::make_unique<Compass>());
+    s_owned.push_back(std::make_unique<TotemCounter>());
+    s_owned.push_back(std::make_unique<ArmorStatus>());
     s_owned.push_back(std::make_unique<Fps>());
     s_owned.push_back(std::make_unique<Cps>());
     s_owned.push_back(std::make_unique<Clock>());
