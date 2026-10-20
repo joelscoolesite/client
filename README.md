@@ -35,8 +35,16 @@ schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaar
 | Screenshot | **F6** kopieert het scherm naar je klembord |
 | Wind Charge Jump | Windcharge in je hand, naar beneden kijken en rechtsklikken: springt voor je in dezelfde tick, zodat je zo hoog mogelijk gaat (springtoets, kijkhoek en vertraging instelbaar) |
 
-**Settings**: accentkleur, HUD-achtergrond, notificaties, **Edit HUD layout** (HUD-elementen verslepen, scrollen
-om groter/kleiner te maken) en **profielen** (instellingen opslaan en wisselen).
+**Settings**: accentkleur, HUD-achtergrond, notificaties, **Stack HUD together** (alle HUD-elementen netjes onder
+elkaar linksboven, standaard aan), **Edit HUD layout** (scrollen om groter/kleiner te maken; zet Stack HUD uit om te
+verslepen) en **profielen** (instellingen opslaan en wisselen).
+
+**Schematics**: zet `.litematic`-bestanden (van Litematica) in `%LOCALAPPDATA%\BedrockWaypoints\schematics\`
+(knop **Open schematics folder**) en klik **Load**. Met **Place at my feet** komt de onderste hoek op je plek te staan;
+daarna kun je hem per blok verschuiven, draaien en spiegelen. De blokken worden als doorzichtige "ghost"-blokken
+getekend, met kleuren per bloksoort. Bij **Layers** kies je één laag of alles tot een laag (handig om laag voor laag
+te bouwen); **Follow my height** pakt de laag waar je voeten zijn. **Materials** laat zien hoeveel van elk blok je
+nodig hebt (ook in stacks van 64). De plaatsing wordt onthouden.
 
 **Waypoints**: lijst (met **Edit** en **Copy** om in chat te plakken), **Add** en **Options**. **F7** zet een waypoint
 waar je staat. Death waypoints, per wereld/dimensie, **Always load** en Nether-omrekening werken zoals voorheen.

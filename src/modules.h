@@ -38,6 +38,7 @@ public:
     std::string description;
     Category category;
     bool hud;
+    bool stackable = true; // joins the stacked HUD column (the compass stays on its own)
     bool enabled = false;
     int key = 0;                 // toggle key, 0 = none
     bool keyWasDown = false;
@@ -58,6 +59,7 @@ struct Theme {
     float accent[4] = {0.56f, 0.42f, 1.0f, 1.0f};
     float hudOpacity = 0.55f;
     bool notifications = true;
+    bool stackHud = true; // HUD elements sit together in one column instead of where they were dragged
 };
 extern Theme g_theme;
 

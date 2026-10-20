@@ -298,6 +298,7 @@ class Compass : public Module {
 public:
     Compass() : Module("Compass", "Compass bar with your waypoints on it.", Category::Hud, true) {
         hudPos = {0.36f, 0.01f};
+        stackable = false;
         AddInt("width", "Width", width, 200, 700);
         AddBool("waypoints", "Show waypoints", showWaypoints);
     }
@@ -786,11 +787,11 @@ namespace modules {
 void Init() {
     s_owned.push_back(std::make_unique<Coordinates>());
     s_owned.push_back(std::make_unique<Compass>());
-    s_owned.push_back(std::make_unique<TotemCounter>());
-    s_owned.push_back(std::make_unique<ArmorStatus>());
     s_owned.push_back(std::make_unique<Fps>());
     s_owned.push_back(std::make_unique<Cps>());
     s_owned.push_back(std::make_unique<Clock>());
+    s_owned.push_back(std::make_unique<TotemCounter>());
+    s_owned.push_back(std::make_unique<ArmorStatus>());
     s_owned.push_back(std::make_unique<Keystrokes>());
     s_owned.push_back(std::make_unique<ChunkBorders>());
     s_owned.push_back(std::make_unique<Fullbright>());
@@ -835,8 +836,26 @@ void DrawWorld(ImDrawList* dl, const GameState& state, ImVec2 screen) {
 }
 
 void DrawHud(ImDrawList* dl, const GameState& state, ImVec2 screen) {
+    // Stacked: one column from the top-left corner in module order, the next column when it is full.
+    // Positions are written back, so turning stacking off keeps this tidy layout as a start.
+    constexpr float kMargin = 8, kGap = 5;
+    ImVec2 cursor(kMargin, kMargin);
+    float columnWidth = 0;
     for (Module* m : s_modules) {
         if (!m->hud || !m->enabled) continue;
+        if (g_theme.stackHud && m->stackable) {
+            if (cursor.y > kMargin && cursor.y + m->lastHudSize.y > screen.y - kMargin) {
+                cursor = ImVec2(cursor.x + columnWidth + kGap, kMargin);
+                columnWidth = 0;
+            }
+            m->lastHudSize = m->DrawHud(dl, cursor, state);
+            m->hudPos = ImVec2(cursor.x / screen.x, cursor.y / screen.y);
+            if (m->lastHudSize.y > 0) {
+                cursor.y += m->lastHudSize.y + kGap;
+                columnWidth = std::max(columnWidth, m->lastHudSize.x);
+            }
+            continue;
+        }
         ImVec2 pos(m->hudPos.x * screen.x, m->hudPos.y * screen.y);
         // Keep elements on screen after a resize.
         pos.x = std::clamp(pos.x, 0.0f, std::max(0.0f, screen.x - m->lastHudSize.x));
@@ -853,7 +872,8 @@ void SaveProfile(const std::string& name) {
     std::ofstream f(ProfilePath(name), std::ios::trunc);
     f << "theme.accent=" << g_theme.accent[0] << ',' << g_theme.accent[1] << ',' << g_theme.accent[2] << '\n'
       << "theme.hudOpacity=" << g_theme.hudOpacity << '\n'
-      << "theme.notifications=" << g_theme.notifications << '\n';
+      << "theme.notifications=" << g_theme.notifications << '\n'
+      << "theme.stackHud=" << g_theme.stackHud << '\n';
     for (Module* m : s_modules) {
         const std::string p = m->name + ".";
         f << p << "enabled=" << m->enabled << '\n'
@@ -903,6 +923,7 @@ bool LoadProfile(const std::string& name) {
     if (values.count("theme.accent")) floats(values["theme.accent"], g_theme.accent, 3);
     if (values.count("theme.hudOpacity")) g_theme.hudOpacity = num(values["theme.hudOpacity"]);
     if (values.count("theme.notifications")) g_theme.notifications = values["theme.notifications"] == "1";
+    if (values.count("theme.stackHud")) g_theme.stackHud = values["theme.stackHud"] == "1";
 
     for (Module* m : s_modules) {
         const std::string p = m->name + ".";

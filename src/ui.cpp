@@ -3,9 +3,11 @@
 #include "config.h"
 #include "game.h"
 #include "modules.h"
+#include "schematic.h"
 #include "waypoints.h"
 
 #include <windows.h>
+#include <shellapi.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 
@@ -20,7 +22,7 @@
 
 namespace {
 
-enum class Page { Hud, Visual, Utility, Waypoints, Settings };
+enum class Page { Hud, Visual, Utility, Waypoints, Schematics, Settings };
 
 bool s_menuOpen = false;
 bool s_hudEdit = false;
@@ -674,6 +676,211 @@ void DrawWaypointsPage(const GameState& state) {
     }
 }
 
+// ---------------------------------------------------------------- schematics
+
+// "minecraft:oak_planks" -> "Oak Planks"
+std::string BlockLabel(const std::string& id) {
+    std::string name;
+    bool upper = true;
+    for (const char ch : id.substr(id.find(':') + 1)) {
+        if (ch == '_') {
+            name += ' ';
+            upper = true;
+        } else {
+            name += upper ? static_cast<char>(std::toupper(static_cast<unsigned char>(ch))) : ch;
+            upper = false;
+        }
+    }
+    return name;
+}
+
+void DrawSchematicFiles() {
+    static std::vector<std::string> files;
+    static double listedAt = -10;
+    if (ImGui::GetTime() - listedAt > 2) { // pick up files dropped in the folder while the menu is open
+        files = schematic::Files();
+        listedAt = ImGui::GetTime();
+    }
+    if (ImGui::Button("Open schematics folder")) {
+        ShellExecuteW(nullptr, L"open", schematic::Folder().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Put .litematic files there");
+
+    ImGui::BeginChild("files", ImVec2(0, 130), ImGuiChildFlags_Borders);
+    for (const std::string& file : files) {
+        ImGui::PushID(file.c_str());
+        const bool current = file == schematic::g_placement.file && schematic::Current();
+        ImGui::AlignTextToFramePadding();
+        if (current) ImGui::TextColored(Accent(), "%s", file.c_str());
+        else ImGui::TextUnformatted(file.c_str());
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - 60);
+        ImGui::BeginDisabled(schematic::Loading());
+        if (ImGui::SmallButton(current ? "Reload" : "Load")) {
+            schematic::g_placement.file = file;
+            schematic::Load(file);
+            schematic::Save();
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    }
+    if (files.empty()) ImGui::TextDisabled("No .litematic files yet.");
+    ImGui::EndChild();
+}
+
+void DrawSchematicPlacement(const GameState& state, const Schematic& sc) {
+    auto& p = schematic::g_placement;
+    bool moved = false;
+
+    RowLabel("Show in the world", 54);
+    if (ToggleSwitch("##visible", &p.visible)) schematic::Save();
+
+    RowLabel("Corner position", 260);
+    ImGui::SetNextItemWidth(260);
+    moved |= ImGui::InputInt3("##origin", p.origin);
+
+    ImGui::BeginDisabled(!state.valid);
+    if (ImGui::Button("Place at my feet")) {
+        const Vec3 feet = FeetBlock(state);
+        p.origin[0] = static_cast<int>(feet.x);
+        p.origin[1] = static_cast<int>(feet.y);
+        p.origin[2] = static_cast<int>(feet.z);
+        p.world = state.world;
+        p.dimension = state.dimension;
+        moved = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    // Nudge one block at a time.
+    static const char* axes[] = {"X", "Y", "Z"};
+    for (int axis = 0; axis < 3; ++axis) {
+        ImGui::PushID(axis);
+        ImGui::SameLine();
+        if (ImGui::Button("-")) --p.origin[axis], moved = true;
+        ImGui::SameLine(0, 2);
+        ImGui::TextUnformatted(axes[axis]);
+        ImGui::SameLine(0, 2);
+        if (ImGui::Button("+")) ++p.origin[axis], moved = true;
+        ImGui::PopID();
+    }
+
+    if (ImGui::Button("Rotate 90")) ++p.rotation, moved = true;
+    ImGui::SameLine();
+    moved |= ImGui::Checkbox("Mirror", &p.mirror);
+    ImGui::SameLine();
+    ImGui::TextDisabled("Rotation: %d", (p.rotation & 3) * 90);
+    if (moved) schematic::PlacementChanged();
+
+    int size[3];
+    schematic::RotatedSize(size);
+    ImGui::TextDisabled("From %d %d %d to %d %d %d", p.origin[0], p.origin[1], p.origin[2], p.origin[0] + size[0] - 1,
+                        p.origin[1] + size[1] - 1, p.origin[2] + size[2] - 1);
+    if (!p.world.empty() && state.world[0] && p.world != state.world)
+        ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1), "Placed in world \"%s\": press Place at my feet to use it here.",
+                           p.world.c_str());
+    (void)sc;
+}
+
+void DrawSchematicView(const GameState& state, const Schematic& sc) {
+    auto& v = schematic::g_view;
+    bool changed = false;
+    RowLabel("Render distance", 200);
+    ImGui::SetNextItemWidth(200);
+    changed |= ImGui::SliderFloat("##range", &v.renderDistance, 8, 96, "%.0f blocks");
+    RowLabel("Opacity", 200);
+    ImGui::SetNextItemWidth(200);
+    changed |= ImGui::SliderFloat("##opacity", &v.opacity, 0.05f, 0.9f, "%.2f");
+    RowLabel("Outlines", 54);
+    changed |= ToggleSwitch("##outlines", &v.outlines);
+
+    static const char* modes[] = {"Everything", "One layer", "Up to layer"};
+    RowLabel("Layers", 200);
+    ImGui::SetNextItemWidth(200);
+    int mode = static_cast<int>(v.layerMode);
+    if (ImGui::Combo("##mode", &mode, modes, IM_ARRAYSIZE(modes))) {
+        v.layerMode = static_cast<LayerMode>(mode);
+        changed = true;
+    }
+    if (v.layerMode != LayerMode::All) {
+        RowLabel("Follow my height", 54);
+        changed |= ToggleSwitch("##follow", &v.followPlayer);
+        ImGui::BeginDisabled(v.followPlayer);
+        RowLabel("Layer", 260);
+        if (ImGui::Button("-##layer")) v.layer = std::max(0, v.layer - 1), changed = true;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(180);
+        int shown = schematic::ActiveLayer(state) + 1;
+        if (ImGui::SliderInt("##layer", &shown, 1, std::max(1, sc.sizeY), "%d")) {
+            v.layer = shown - 1;
+            changed = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("+##layer")) v.layer = std::min(sc.sizeY - 1, v.layer + 1), changed = true;
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Layer %d of %d (y = %d)", schematic::ActiveLayer(state) + 1, sc.sizeY,
+                            schematic::g_placement.origin[1] + schematic::ActiveLayer(state));
+    }
+    if (changed) schematic::Save();
+}
+
+void DrawSchematicMaterials(const GameState& state) {
+    static bool visibleOnly = false;
+    ImGui::Checkbox("Only the shown layers", &visibleOnly);
+    const auto list = schematic::Materials(state, visibleOnly && schematic::g_view.layerMode != LayerMode::All);
+    if (ImGui::BeginTable("materials", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY, ImVec2(0, 220))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Block");
+        ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 70);
+        ImGui::TableSetupColumn("Stacks", ImGuiTableColumnFlags_WidthFixed, 110);
+        ImGui::TableHeadersRow();
+        for (const auto& [id, count] : list) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(BlockLabel(id).c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", count);
+            ImGui::TableNextColumn();
+            if (count >= 64) ImGui::Text("%d x 64 + %d", count / 64, count % 64);
+            else ImGui::TextDisabled("-");
+        }
+        ImGui::EndTable();
+    }
+}
+
+void DrawSchematicsPage(const GameState& state) {
+    SectionTitle("Schematic");
+    const Schematic* sc = schematic::Current();
+    if (schematic::Loading()) {
+        ImGui::TextColored(Accent(), "Loading %s ...", schematic::g_placement.file.c_str());
+    } else if (const std::string error = schematic::LastError(); !error.empty()) {
+        ImGui::TextColored(ImVec4(1, 0.45f, 0.45f, 1), "Could not load it: %s", error.c_str());
+    }
+    if (sc) {
+        ImGui::PushFont(s_fontBold);
+        ImGui::TextUnformatted(sc->name.c_str());
+        ImGui::PopFont();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s%s  %d x %d x %d  -  %zu blocks", sc->author.empty() ? "" : "by ", sc->author.c_str(),
+                            sc->sizeX, sc->sizeY, sc->sizeZ, sc->blocks.size());
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - 70);
+        if (ImGui::SmallButton("Unload")) {
+            schematic::Unload();
+            sc = nullptr;
+        }
+    }
+    DrawSchematicFiles();
+    if (!sc) return;
+
+    ImGui::Spacing();
+    SectionTitle("Placement");
+    DrawSchematicPlacement(state, *sc);
+    ImGui::Spacing();
+    SectionTitle("Display");
+    DrawSchematicView(state, *sc);
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Materials")) DrawSchematicMaterials(state);
+}
+
 // ---------------------------------------------------------------- module pages
 
 void DrawSetting(Module* m, Setting& st) {
@@ -808,6 +1015,11 @@ void DrawSettingsPage(const GameState& state) {
     ImGui::SliderFloat("##hudbg", &g_theme.hudOpacity, 0.0f, 1.0f, "%.2f");
     RowLabel("Notifications", 54);
     ToggleSwitch("##notify", &g_theme.notifications);
+    RowLabel("Stack HUD together", 54);
+    ToggleSwitch("##stack", &g_theme.stackHud);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("All HUD elements in one neat column in the top-left corner.\n"
+                          "Turn it off to drag them anywhere in Edit HUD layout.");
     RowLabel("HUD layout", 160);
     if (ImGui::Button("Edit HUD layout", ImVec2(160, 0))) {
         s_hudEdit = true;
@@ -916,6 +1128,7 @@ void DrawMenu(const GameState& state, ImVec2 screen) {
                                     {"Visual", Page::Visual},
                                     {"Utility", Page::Utility},
                                     {"Waypoints", Page::Waypoints},
+                                    {"Schematics", Page::Schematics},
                                     {"Settings", Page::Settings}};
     for (const auto& e : entries) {
         if (SidebarButton(e.label, s_page == e.page)) {
@@ -941,6 +1154,7 @@ void DrawMenu(const GameState& state, ImVec2 screen) {
         case Page::Visual: DrawModulePage(Category::Visual); break;
         case Page::Utility: DrawModulePage(Category::Utility); break;
         case Page::Waypoints: DrawWaypointsPage(state); break;
+        case Page::Schematics: DrawSchematicsPage(state); break;
         case Page::Settings: DrawSettingsPage(state); break;
         }
     }
@@ -967,7 +1181,8 @@ void DrawHudEditor(ImVec2 screen) {
         ImGui::SetCursorScreenPos(pos);
         ImGui::InvisibleButton(m->name.c_str(), size);
         const bool hovered = ImGui::IsItemHovered(), active = ImGui::IsItemActive();
-        if (active && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
+        const bool stacked = g_theme.stackHud && m->stackable;
+        if (active && !stacked && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0)) {
             m->hudPos.x = std::clamp((pos.x + io.MouseDelta.x) / screen.x, 0.0f, 1.0f);
             m->hudPos.y = std::clamp((pos.y + io.MouseDelta.y) / screen.y, 0.0f, 1.0f);
         }
@@ -982,7 +1197,9 @@ void DrawHudEditor(ImVec2 screen) {
     }
 
     // Instructions bar
-    const char* help = "Drag to move  -  Scroll to resize  -  press the menu key or Done to finish";
+    const char* help = g_theme.stackHud
+                           ? "Stacked layout: scroll to resize (turn off Stack HUD in Settings to drag)  -  Done to finish"
+                           : "Drag to move  -  Scroll to resize  -  press the menu key or Done to finish";
     const ImVec2 ts = ImGui::CalcTextSize(help);
     const ImVec2 barMin(screen.x / 2 - ts.x / 2 - 80, screen.y - 90), barMax(screen.x / 2 + ts.x / 2 + 80, screen.y - 40);
     dl->AddRectFilled(barMin, barMax, IM_COL32(16, 17, 24, 235), 12);
@@ -1026,6 +1243,7 @@ namespace ui {
 void Setup() {
     LoadFonts();
     modules::Init();
+    schematic::Init();
     ApplyStyle();
 }
 
@@ -1052,6 +1270,7 @@ void Draw() {
             if (w.visible) DrawWaypoint(bg, state, w, screen.x, screen.y);
     }
     modules::DrawWorld(bg, state, screen);
+    schematic::DrawWorld(bg, state, screen);
     if (s_hudEdit) bg->AddRectFilled(ImVec2(0, 0), screen, IM_COL32(0, 0, 0, 90));
     modules::hudPreview = s_hudEdit;
     modules::DrawHud(bg, state, screen);
