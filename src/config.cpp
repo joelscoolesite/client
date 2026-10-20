@@ -48,6 +48,20 @@ constexpr NumericField kNumericFields[] = {
     {"guiDataMessages", &Offsets::guiDataMessages},
     {"guiMessageSize", &Offsets::guiMessageSize},
     {"guiMessageText", &Offsets::guiMessageText},
+    {"minecraftGameCursorGrabbed", &Offsets::minecraftGameCursorGrabbed},
+};
+
+struct StringField {
+    const char* key;
+    std::string Offsets::* member;
+};
+
+constexpr StringField kStringFields[] = {
+    {"setupAndRenderSig", &Offsets::setupAndRenderSig},
+    {"renderLevelSig", &Offsets::renderLevelSig},
+    {"gammaSig", &Offsets::gammaSig},
+    {"releaseCursorSig", &Offsets::releaseCursorSig},
+    {"grabCursorSig", &Offsets::grabCursorSig},
 };
 
 std::string Trim(const std::string& s) {
@@ -103,12 +117,10 @@ void WriteDefaultConfig(const std::filesystem::path& path) {
       << "profile=auto\n\n"
       << "; After a Minecraft update the built-in profiles can stop working.\n"
       << "; Remove the ; in front of a line below to override that value. Delete this file to reset.\n"
-      << ";setupAndRenderSig=" << d.setupAndRenderSig << "\n"
       << ";sigIsCall=" << (d.sigIsCall ? 1 : 0) << "\n"
-      << ";renderLevelSig=" << d.renderLevelSig << "\n"
-      << ";renderLevelSigIsCall=" << (d.renderLevelSigIsCall ? 1 : 0) << "\n"
-      << ";gammaSig=" << d.gammaSig << "\n"
-      << "; Values ending in GetLevelRenderer/GetLocalPlayer are vtable indexes.\n";
+      << ";renderLevelSigIsCall=" << (d.renderLevelSigIsCall ? 1 : 0) << "\n";
+    for (const auto& field : kStringFields) f << ";" << field.key << "=" << d.*field.member << "\n";
+    f << "; Values ending in GetLevelRenderer/GetLocalPlayer are vtable indexes.\n";
     for (const auto& field : kNumericFields) f << ";" << field.key << "=" << Hex(d.*field.member) << "\n";
 }
 
@@ -121,6 +133,7 @@ const std::vector<Offsets>& BuiltInProfiles() {
         // Values from the Latite client (github.com/LatiteClient/Latite).
         Offsets v2650;
         v2650.name = "1.26.5x";
+        v2650.version = "1.26.5";
         v2650.setupAndRenderSig = "E8 ? ? ? ? 48 8B 4B ? 48 85 C9 74 ? 48 8B 01 48 8B 40 ? 48 89 FA FF 15 ? ? ? ? 48 8D 4D";
         v2650.sigIsCall = true;
         v2650.uiContextClientInstance = 0x8;
@@ -154,7 +167,34 @@ const std::vector<Offsets>& BuiltInProfiles() {
         v2650.guiDataMessages = 0x150;
         v2650.guiMessageSize = 0x110;
         v2650.guiMessageText = 0x8;
+        v2650.releaseCursorSig =
+            "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 "
+            "48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC "
+            "CC CC CC CC 56 53";
+        v2650.grabCursorSig =
+            "56 48 83 EC ? 48 89 CE 48 8B 01 48 8B 80 ? ? ? ? FF 15 ? ? ? ? 84 C0 74 ? 48 8B 8E ? ? ? ? 48 8B 01 "
+            "48 8B 80 ? ? ? ? 48 8B 15 ? ? ? ? 48 83 C4 ? 5E 48 FF E2 90 48 83 C4 ? 5E C3 CC CC CC CC CC CC CC CC CC "
+            "CC CC CC CC 56 48 83 EC";
+        v2650.minecraftGameCursorGrabbed = 0x1E8;
         list.push_back(v2650);
+
+        // 1.26.4x has the same setupAndRender signature as 1.26.5x but other offsets and gamma option id
+        // (Latite commit ee9bbe7, "update offsets for 1.26.4").
+        Offsets v2640 = v2650;
+        v2640.name = "1.26.4x";
+        v2640.version = "1.26.4";
+        v2640.clientInstanceMinecraftGame = 0x1A0;
+        v2640.minecraftGameGameRenderer = 0x1318;
+        v2640.gameRendererViewMatrix = 0x380;
+        v2640.gameRendererProjMatrix = 0x400;
+        v2640.clientInstanceLevelRenderer = 0x1B8;
+        v2640.clientInstanceMinecraft = 0x1A8;
+        v2640.minecraftGameSession = 0xC0;
+        v2640.screenViewVisualTree = 0x48;
+        v2640.gammaSig = "48 83 EC 38 48 8B 05 ? ? ? ? 48 31 E0 48 89 44 24 ? 48 8B 01 48 8B 40 08 48 8D 54 24 ? 41 B8 35 00 00 00";
+        v2640.clientInstanceGuiData = 0x648;
+        v2640.minecraftGameCursorGrabbed = 0x1D8;
+        list.push_back(v2640);
 
         // Values from the Flarial client (github.com/flarialmc/dll). Camera only.
         Offsets v260;
@@ -182,20 +222,15 @@ void ApplyOverrides(Offsets& o) {
         const auto it = g_config.overrides.find(field.key);
         if (it != g_config.overrides.end()) ParseNumber(it->second, o.*field.member);
     }
-    if (const auto it = g_config.overrides.find("setupAndRenderSig"); it != g_config.overrides.end()) {
-        o.setupAndRenderSig = it->second;
+    for (const auto& field : kStringFields) {
+        const auto it = g_config.overrides.find(field.key);
+        if (it != g_config.overrides.end()) o.*field.member = it->second;
     }
     if (const auto it = g_config.overrides.find("sigIsCall"); it != g_config.overrides.end()) {
         o.sigIsCall = it->second != "0";
     }
-    if (const auto it = g_config.overrides.find("renderLevelSig"); it != g_config.overrides.end()) {
-        o.renderLevelSig = it->second;
-    }
     if (const auto it = g_config.overrides.find("renderLevelSigIsCall"); it != g_config.overrides.end()) {
         o.renderLevelSigIsCall = it->second != "0";
-    }
-    if (const auto it = g_config.overrides.find("gammaSig"); it != g_config.overrides.end()) {
-        o.gammaSig = it->second;
     }
 }
 

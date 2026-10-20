@@ -10,6 +10,9 @@
 // An offset of 0 means "not known for this version": that feature is switched off.
 struct Offsets {
     std::string name;
+    // Start of the game's file version this profile is made for ("1.26.5" matches 1.26.5001.0).
+    // Several versions share signatures, so a profile for the exact version is tried first.
+    std::string version;
     // ScreenView::setupAndRender(ScreenView*, MinecraftUIRenderContext*)
     std::string setupAndRenderSig;
     bool sigIsCall = false; // the signature matches a `call setupAndRender` instead of the function itself
@@ -51,8 +54,13 @@ struct Offsets {
     uintptr_t levelRendererPlayerFovX = 0; // LevelRendererPlayer -> float
     uintptr_t levelRendererPlayerFovY = 0; // LevelRendererPlayer -> float
 
-    // Fullbright: float Options::getGamma(Options*, void*)
+    // Fullbright: float Options::getGamma(Options*, void*). The option id in it changes between versions.
     std::string gammaSig;
+
+    // Free mouse while the menu is open: void ClientInstance::releaseCursor/grabCursor(ClientInstance*)
+    std::string releaseCursorSig;
+    std::string grabCursorSig;
+    uintptr_t minecraftGameCursorGrabbed = 0; // MinecraftGame -> bool, true while the game holds the mouse
 
     // Chat
     uintptr_t clientInstanceGuiData = 0; // ClientInstance -> GuiData*

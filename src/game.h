@@ -46,6 +46,8 @@ GameState State();
 // Zoom factor (1 = normal) and gamma override (< 0 = game value). Safe from any thread.
 void SetZoom(float factor);
 void SetGamma(float gamma);
+// While true the game lets go of the mouse (menu open). Safe from any thread.
+void SetCursorFree(bool free);
 bool ZoomAvailable();
 bool GammaAvailable();
 bool ChatAvailable();

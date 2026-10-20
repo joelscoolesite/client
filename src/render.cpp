@@ -83,6 +83,11 @@ LRESULT CALLBACK WndProcDetour(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
         const bool mouse = msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST;
         if ((keyboard && wParam != static_cast<WPARAM>(g_config.menuKey)) || mouse) return 0;
         if (msg == WM_INPUT) return DefWindowProcW(hwnd, msg, wParam, lParam);
+        // The game hides the cursor; show the normal arrow over the menu.
+        if (msg == WM_SETCURSOR && LOWORD(lParam) == HTCLIENT) {
+            SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+            return TRUE;
+        }
     }
     return CallWindowProcW(g_originalWndProc, hwnd, msg, wParam, lParam);
 }

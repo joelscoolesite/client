@@ -13,7 +13,7 @@ Elke push bouwt de DLL automatisch op GitHub:
 
 1. Start Minecraft en ga een wereld of server in.
 2. Injecteer `BedrockWaypoints.dll` met je injector.
-3. Druk op **Esc** (zodat je muis vrij is) en daarna op **F8** voor het menu.
+3. Druk op **F8** voor het menu. Je muis wordt dan vrijgegeven; druk nog eens op **F8** om verder te spelen.
 
 Het menu heeft een zijbalk met **HUD**, **Visual**, **Utility**, **Waypoints** en **Settings**. Elke module heeft een
 schakelaar, een eigen sneltoets en instellingen (klik op **Settings** in de kaart). Met de zoekbalk vind je snel een module.
@@ -48,14 +48,19 @@ bij een update. Ingebouwde profielen:
 | Profiel | Bron |
 | --- | --- |
 | `1.26.5x` | [Latite](https://github.com/LatiteClient/Latite) |
+| `1.26.4x` | [Latite](https://github.com/LatiteClient/Latite) (commit `ee9bbe7`) |
 | `1.26.0-1.26.3` | [Flarial](https://github.com/flarialmc/dll) |
 
-De DLL probeert ze zelf en kiest de eerste die past. Bovenin het menu zie je je Minecraft-versie en welk profiel
+De DLL probeert ze zelf en kiest de eerste die past. Profielen die bij je Minecraft-versie horen worden eerst
+geprobeerd: 1.26.4x en 1.26.5x hebben dezelfde signature, maar andere offsets (en een ander ID voor de gamma-optie
+die Fullbright gebruikt). Bovenin het menu zie je je Minecraft-versie en welk profiel
 gebruikt wordt. Werkt geen enkel profiel, dan zegt het menu *"... is not supported yet"*.
 
 Nieuwe waarden kun je zonder opnieuw bouwen invullen in `%LOCALAPPDATA%\BedrockWaypoints\config.ini`: haal de `;`
 weg voor een regel en pas de waarde aan. Verwijder `config.ini` om terug te gaan naar de standaardwaarden.
-In `log.txt` in dezelfde map zie je wat er gebeurde.
+In `log.txt` in dezelfde map zie je wat er gebeurde. Werkt Fullbright niet, kijk dan naar de regels met `getGamma`:
+`signature not found` betekent dat de signature niet past, en `getGamma: game value ... replaced` betekent dat de hook
+echt door het spel gebruikt wordt.
 
 In `config.ini` kun je ook andere toetsen kiezen: `menuKey` (menu) en `addWaypointKey` (snelle waypoint), bijv. `0x2D` voor Insert.
 

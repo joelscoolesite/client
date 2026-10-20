@@ -1038,7 +1038,12 @@ void Draw() {
     PollKeys(state);
     HandleDeath();
     modules::Frame(state, s_menuOpen || s_hudEdit);
-    ImGui::GetIO().MouseDrawCursor = s_menuOpen || s_hudEdit;
+    game::SetCursorFree(s_menuOpen || s_hudEdit);
+    // Draw our own cursor only when the game keeps the Windows cursor hidden.
+    CURSORINFO cursor{};
+    cursor.cbSize = sizeof(cursor);
+    const bool systemCursor = GetCursorInfo(&cursor) && (cursor.flags & CURSOR_SHOWING) && cursor.hCursor;
+    ImGui::GetIO().MouseDrawCursor = (s_menuOpen || s_hudEdit) && !systemCursor;
     s_menuAlpha = Lerp(s_menuAlpha, s_menuOpen ? 1.0f : 0.0f, ImGui::GetIO().DeltaTime * 16);
 
     ImDrawList* bg = ImGui::GetBackgroundDrawList();

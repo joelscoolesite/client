@@ -5,6 +5,7 @@
 #include <windows.h>
 #include <MinHook.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -256,7 +257,82 @@ void __fastcall RenderLevelDetour(void* levelRenderer, void* screenContext, void
 float __fastcall GetGammaDetour(void* options, void* unk) {
     const float original = g_originalGetGamma(options, unk);
     const float gamma = g_gamma.load();
+    // Shows in log.txt whether the hooked function is really used by the game.
+    static std::atomic<bool> logged{false};
+    if (gamma >= 0 && !logged.exchange(true)) Log("getGamma: game value " + std::to_string(original) + " replaced");
     return gamma >= 0 ? gamma : original;
+}
+
+// ---------------------------------------------------------------- free mouse
+
+// True while our menu is open: the game must let go of the mouse.
+std::atomic<bool> g_cursorFree{false};
+
+using CursorFn = void(__fastcall*)(void* clientInstance);
+CursorFn g_releaseCursor = nullptr;
+CursorFn g_grabCursor = nullptr;
+bool g_weReleased = false; // game thread only
+
+// Fallback for versions without the functions above: keep the game from locking and centring the mouse.
+using ClipCursorFn = BOOL(WINAPI*)(const RECT*);
+using SetCursorPosFn = BOOL(WINAPI*)(int, int);
+ClipCursorFn g_originalClipCursor = nullptr;
+SetCursorPosFn g_originalSetCursorPos = nullptr;
+std::mutex g_clipMutex;
+bool g_gameClipped = false;
+RECT g_gameClip{};
+
+BOOL WINAPI ClipCursorDetour(const RECT* rect) {
+    {
+        std::lock_guard lock(g_clipMutex);
+        g_gameClipped = rect != nullptr;
+        if (rect) g_gameClip = *rect;
+    }
+    return g_originalClipCursor(g_cursorFree ? nullptr : rect);
+}
+
+BOOL WINAPI SetCursorPosDetour(int x, int y) {
+    if (g_cursorFree) return TRUE;
+    return g_originalSetCursorPos(x, y);
+}
+
+bool ReadCursorGrabbedUnsafe(uintptr_t clientInstance, bool& out) {
+    const Offsets& c = g_offsets;
+    if (!c.minecraftGameCursorGrabbed) return false;
+    const auto minecraftGame = Read<uintptr_t>(clientInstance + c.clientInstanceMinecraftGame);
+    if (!minecraftGame) return false;
+    out = Read<uint8_t>(minecraftGame + c.minecraftGameCursorGrabbed) != 0;
+    return true;
+}
+
+bool ReadCursorGrabbed(uintptr_t clientInstance, bool& out) {
+    GUARDED(ReadCursorGrabbedUnsafe(clientInstance, out))
+}
+bool CallCursorFn(CursorFn fn, uintptr_t clientInstance) {
+    GUARDED((fn(reinterpret_cast<void*>(clientInstance)), true))
+}
+
+// Runs on the game thread, like Latite's ClickGUI: release while the menu is open, grab again when it closes.
+void UpdateCursor(uintptr_t clientInstance) {
+    if (!g_releaseCursor) return;
+    bool grabbed = true;
+    const bool known = ReadCursorGrabbed(clientInstance, grabbed);
+    if (g_cursorFree) {
+        // Without the grabbed flag we can only release once.
+        if (known ? grabbed : !g_weReleased) g_weReleased = CallCursorFn(g_releaseCursor, clientInstance);
+    } else if (g_weReleased) {
+        g_weReleased = false;
+        if (g_grabCursor && !(known && grabbed)) CallCursorFn(g_grabCursor, clientInstance);
+    }
+}
+
+bool InstallApiHook(const wchar_t* module, const char* name, void* detour, void** original) {
+    void* target = reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(module), name));
+    if (!target || MH_CreateHook(target, detour, original) != MH_OK || MH_EnableHook(target) != MH_OK) {
+        Log(std::string(name) + ": hook failed");
+        return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------- chat
@@ -348,6 +424,14 @@ bool InstallHook(const std::string& sig, bool isCall, void* detour, void** origi
     return true;
 }
 
+template <typename Fn>
+Fn FindFunction(const std::string& sig, const char* name) {
+    if (sig.empty()) return nullptr;
+    const auto address = FindPattern(sig);
+    Log(std::string(name) + (address ? ": found" : ": signature not found"));
+    return address ? reinterpret_cast<Fn>(*address) : nullptr;
+}
+
 void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     g_originalSetupAndRender(screenView, uiRenderContext);
 
@@ -355,6 +439,7 @@ void __fastcall SetupAndRenderDetour(void* screenView, void* uiRenderContext) {
     if (!uiRenderContext || !ReadClientInstance(reinterpret_cast<uintptr_t>(uiRenderContext), clientInstance))
         return;
 
+    UpdateCursor(clientInstance);
     if (screenView) CheckScreen(reinterpret_cast<uintptr_t>(screenView));
 
     GameState state;
@@ -396,12 +481,25 @@ std::string GameVersion() {
 }
 
 bool Init(std::string& error) {
-    Log("Minecraft version: " + GameVersion());
+    const std::string version = GameVersion();
+    Log("Minecraft version: " + version);
 
-    for (const Offsets& profile : BuiltInProfiles()) {
-        if (g_config.profile != "auto" && g_config.profile != profile.name) continue;
+    InstallApiHook(L"user32.dll", "ClipCursor", reinterpret_cast<void*>(&ClipCursorDetour),
+                   reinterpret_cast<void**>(&g_originalClipCursor));
+    InstallApiHook(L"user32.dll", "SetCursorPos", reinterpret_cast<void*>(&SetCursorPosDetour),
+                   reinterpret_cast<void**>(&g_originalSetCursorPos));
 
-        Offsets candidate = profile;
+    // Profiles made for this version first: 1.26.4x and 1.26.5x share the setupAndRender signature.
+    std::vector<const Offsets*> order;
+    for (const Offsets& profile : BuiltInProfiles())
+        if (!profile.version.empty() && version.rfind(profile.version, 0) == 0) order.push_back(&profile);
+    for (const Offsets& profile : BuiltInProfiles())
+        if (std::find(order.begin(), order.end(), &profile) == order.end()) order.push_back(&profile);
+
+    for (const Offsets* profile : order) {
+        if (g_config.profile != "auto" && g_config.profile != profile->name) continue;
+
+        Offsets candidate = *profile;
         ApplyOverrides(candidate);
         auto address = FindPattern(candidate.setupAndRenderSig);
         if (!address) {
@@ -426,6 +524,8 @@ bool Init(std::string& error) {
                                    reinterpret_cast<void**>(&g_originalRenderLevel), "renderLevel");
         g_gammaHooked = InstallHook(candidate.gammaSig, false, reinterpret_cast<void*>(&GetGammaDetour),
                                     reinterpret_cast<void**>(&g_originalGetGamma), "getGamma");
+        g_releaseCursor = FindFunction<CursorFn>(candidate.releaseCursorSig, "releaseCursor");
+        g_grabCursor = FindFunction<CursorFn>(candidate.grabCursorSig, "grabCursor");
         return true;
     }
 
@@ -447,6 +547,13 @@ void SetZoom(float factor) {
 
 void SetGamma(float gamma) {
     g_gamma = gamma;
+}
+
+void SetCursorFree(bool free) {
+    if (g_cursorFree.exchange(free) == free || !g_originalClipCursor) return;
+    std::lock_guard lock(g_clipMutex);
+    // Put back the clip the game asked for while we were blocking it.
+    g_originalClipCursor(free || !g_gameClipped ? nullptr : &g_gameClip);
 }
 
 bool ZoomAvailable() {
